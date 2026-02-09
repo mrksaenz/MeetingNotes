@@ -1,12 +1,19 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Sidebar from '@/components/layout/Sidebar';
 import MobileNav from '@/components/layout/MobileNav';
 import MobileHeader from '@/components/layout/MobileHeader';
 import CreateWorkspaceModal from '@/components/workspace/CreateWorkspaceModal';
+import RecordingScreen from '@/components/recording/RecordingScreen';
+import MeetingCard from '@/components/meeting/MeetingCard';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
-import type { Workspace } from '@/types/database';
+import { createClient } from '@/lib/supabase/client';
+import type { Workspace, Meeting, RecordingPart } from '@/types/database';
+
+interface MeetingWithParts extends Meeting {
+  recording_parts: RecordingPart[];
+}
 
 export default function DashboardPage() {
   const { workspaces, loading, createWorkspace } = useWorkspaces();
@@ -14,12 +21,74 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<'workspaces' | 'recordings' | 'settings'>('recordings');
   const [showCreateModal, setShowCreateModal] = useState(false);
 
+  // Recording state
+  const [isRecording, setIsRecording] = useState(false);
+  const [continueMeeting, setContinueMeeting] = useState<MeetingWithParts | null>(null);
+
+  // Meetings state
+  const [meetings, setMeetings] = useState<MeetingWithParts[]>([]);
+  const [meetingsLoading, setMeetingsLoading] = useState(false);
+
+  const supabase = createClient();
+
+  const fetchMeetings = useCallback(async (wsId: string) => {
+    setMeetingsLoading(true);
+    const { data, error } = await supabase
+      .from('meetings')
+      .select('*, recording_parts(*)')
+      .eq('workspace_id', wsId)
+      .order('recorded_at', { ascending: false });
+
+    if (!error && data) {
+      const sorted = data.map((m: MeetingWithParts) => ({
+        ...m,
+        recording_parts: (m.recording_parts || []).sort(
+          (a: RecordingPart, b: RecordingPart) => a.part_number - b.part_number
+        ),
+      }));
+      setMeetings(sorted);
+    }
+    setMeetingsLoading(false);
+  }, [supabase]);
+
+  // Fetch meetings when workspace changes
+  useEffect(() => {
+    if (selectedWorkspace) {
+      fetchMeetings(selectedWorkspace.id);
+    } else {
+      setMeetings([]);
+    }
+  }, [selectedWorkspace, fetchMeetings]);
+
   async function handleCreateWorkspace(name: string, color: string) {
     const ws = await createWorkspace(name, color);
     if (ws) {
       setSelectedWorkspace(ws);
       setShowCreateModal(false);
     }
+  }
+
+  function handleStartRecording() {
+    setContinueMeeting(null);
+    setIsRecording(true);
+  }
+
+  function handleContinueMeeting(meeting: MeetingWithParts) {
+    setContinueMeeting(meeting);
+    setIsRecording(true);
+  }
+
+  function handleRecordingComplete() {
+    setIsRecording(false);
+    setContinueMeeting(null);
+    if (selectedWorkspace) {
+      fetchMeetings(selectedWorkspace.id);
+    }
+  }
+
+  function handleRecordingCancel() {
+    setIsRecording(false);
+    setContinueMeeting(null);
   }
 
   if (loading) {
@@ -33,6 +102,21 @@ export default function DashboardPage() {
           Loading...
         </div>
       </div>
+    );
+  }
+
+  // Full-screen recording mode
+  if (isRecording && selectedWorkspace) {
+    return (
+      <RecordingScreen
+        workspaceId={selectedWorkspace.id}
+        workspaceName={selectedWorkspace.name}
+        workspaceColor={selectedWorkspace.color || '#3b82f6'}
+        existingMeeting={continueMeeting || undefined}
+        existingPartCount={continueMeeting?.recording_parts.length || 0}
+        onComplete={handleRecordingComplete}
+        onCancel={handleRecordingCancel}
+      />
     );
   }
 
@@ -64,7 +148,13 @@ export default function DashboardPage() {
               onCreateWorkspace={() => setShowCreateModal(true)}
             />
           ) : (
-            <WorkspaceView workspace={selectedWorkspace} />
+            <WorkspaceView
+              workspace={selectedWorkspace}
+              meetings={meetings}
+              meetingsLoading={meetingsLoading}
+              onStartRecording={handleStartRecording}
+              onContinueMeeting={handleContinueMeeting}
+            />
           )}
         </main>
 
@@ -120,9 +210,22 @@ function EmptyState({
   );
 }
 
-function WorkspaceView({ workspace }: { workspace: Workspace }) {
+function WorkspaceView({
+  workspace,
+  meetings,
+  meetingsLoading,
+  onStartRecording,
+  onContinueMeeting,
+}: {
+  workspace: Workspace;
+  meetings: MeetingWithParts[];
+  meetingsLoading: boolean;
+  onStartRecording: () => void;
+  onContinueMeeting: (meeting: MeetingWithParts) => void;
+}) {
   return (
     <div>
+      {/* Workspace header */}
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <span
@@ -131,24 +234,64 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           />
           <h1 className="text-xl font-semibold text-foreground">{workspace.name}</h1>
         </div>
-      </div>
 
-      {/* Empty recordings state */}
-      <div className="flex flex-col items-center py-16 text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-50">
-          <svg className="h-8 w-8 text-primary-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
-          </svg>
-        </div>
-        <h3 className="text-lg font-medium text-foreground">No recordings yet</h3>
-        <p className="mt-1 max-w-xs text-sm text-muted">
-          Tap the record button to capture your first meeting in this workspace.
-        </p>
-        <button className="mt-6 flex items-center gap-2 rounded-full bg-accent-rose px-6 py-3 text-sm font-medium text-white shadow-lg transition-all hover:shadow-xl active:scale-95">
-          <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="8" />
+        {/* Record button (desktop) */}
+        <button
+          onClick={onStartRecording}
+          className="hidden md:flex items-center gap-2 rounded-lg bg-accent-rose px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md active:scale-[0.98]"
+        >
+          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="6" />
           </svg>
           Record
+        </button>
+      </div>
+
+      {/* Meetings list */}
+      {meetingsLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <div className="flex items-center gap-3 text-muted">
+            <svg className="h-5 w-5 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            Loading meetings...
+          </div>
+        </div>
+      ) : meetings.length > 0 ? (
+        <div className="space-y-3">
+          {meetings.map((meeting) => (
+            <MeetingCard
+              key={meeting.id}
+              meeting={meeting}
+              onContinue={onContinueMeeting}
+            />
+          ))}
+        </div>
+      ) : (
+        /* Empty state */
+        <div className="flex flex-col items-center py-16 text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary-50">
+            <svg className="h-8 w-8 text-primary-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 18.75a6 6 0 006-6v-1.5m-6 7.5a6 6 0 01-6-6v-1.5m6 7.5v3.75m-3.75 0h7.5M12 15.75a3 3 0 01-3-3V4.5a3 3 0 116 0v8.25a3 3 0 01-3 3z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-medium text-foreground">No recordings yet</h3>
+          <p className="mt-1 max-w-xs text-sm text-muted">
+            Tap the record button to capture your first meeting in this workspace.
+          </p>
+        </div>
+      )}
+
+      {/* Floating record button (mobile) */}
+      <div className="fixed bottom-20 right-4 md:hidden z-30">
+        <button
+          onClick={onStartRecording}
+          className="flex h-14 w-14 items-center justify-center rounded-full bg-accent-rose text-white shadow-lg transition-all hover:shadow-xl active:scale-95"
+        >
+          <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="6" />
+          </svg>
         </button>
       </div>
     </div>
