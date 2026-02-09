@@ -1,23 +1,47 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/lib/supabase/server';
+import { createServerClient } from '@supabase/ssr';
 import { createServiceClient } from '@/lib/supabase/service';
 import { transcribeAudio } from '@/lib/assemblyai';
 import { summarizeTranscription } from '@/lib/anthropic';
 import type { ProcessingLevel } from '@/types/database';
+import { cookies } from 'next/headers';
+
+// Allow up to 5 minutes for long transcriptions
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {
-    // Authenticate the user
-    const supabase = await createClient();
+    // Authenticate the user via cookies
+    const cookieStore = await cookies();
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll(cookiesToSet) {
+            try {
+              cookiesToSet.forEach(({ name, value, options }) =>
+                cookieStore.set(name, value, options)
+              );
+            } catch {
+              // Ignored in API routes
+            }
+          },
+        },
+      }
+    );
+
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { recordingPartId, processingLevel } = await request.json() as {
-      recordingPartId: string;
-      processingLevel: ProcessingLevel;
-    };
+    const body = await request.json();
+    const recordingPartId = body.recordingPartId as string;
+    const processingLevel = body.processingLevel as ProcessingLevel;
 
     if (!recordingPartId || !processingLevel) {
       return NextResponse.json(
@@ -29,20 +53,31 @@ export async function POST(request: NextRequest) {
     // Use service client for server-side operations (bypasses RLS)
     const serviceClient = createServiceClient();
 
-    // Fetch recording part and verify ownership
+    // Fetch recording part
     const { data: part, error: partError } = await serviceClient
       .from('recording_parts')
-      .select('*, meetings!inner(user_id)')
+      .select('*')
       .eq('id', recordingPartId)
       .single();
 
     if (partError || !part) {
+      console.error('Part lookup error:', partError);
       return NextResponse.json({ error: 'Recording part not found' }, { status: 404 });
     }
 
-    // Verify the user owns this recording
-    const meeting = part.meetings as { user_id: string };
-    if (meeting.user_id !== user.id) {
+    // Verify ownership via meeting
+    const { data: meetingData, error: meetingError } = await serviceClient
+      .from('meetings')
+      .select('user_id')
+      .eq('id', part.meeting_id)
+      .single();
+
+    if (meetingError || !meetingData) {
+      console.error('Meeting lookup error:', meetingError);
+      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 });
+    }
+
+    if (meetingData.user_id !== user.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
@@ -53,11 +88,12 @@ export async function POST(request: NextRequest) {
       .eq('id', recordingPartId);
 
     // Get a signed URL for the audio file
-    const { data: signedUrl } = await serviceClient.storage
+    const { data: signedUrl, error: signedUrlError } = await serviceClient.storage
       .from('recordings')
       .createSignedUrl(part.audio_file_path, 3600); // 1 hour expiry
 
     if (!signedUrl?.signedUrl) {
+      console.error('Signed URL error:', signedUrlError);
       await serviceClient
         .from('recording_parts')
         .update({ processing_status: 'failed' })
@@ -75,7 +111,8 @@ export async function POST(request: NextRequest) {
         .from('recording_parts')
         .update({ processing_status: 'failed' })
         .eq('id', recordingPartId);
-      return NextResponse.json({ error: 'Transcription failed' }, { status: 500 });
+      const message = err instanceof Error ? err.message : 'Transcription failed';
+      return NextResponse.json({ error: message }, { status: 500 });
     }
 
     // Save transcription
@@ -148,6 +185,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, transcriptionId: transcription.id });
   } catch (err) {
     console.error('Processing error:', err);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    const message = err instanceof Error ? err.message : 'Internal server error';
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
