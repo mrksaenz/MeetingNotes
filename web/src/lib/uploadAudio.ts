@@ -16,7 +16,7 @@ export async function uploadAudio(
     .from('recordings')
     .upload(fileName, audioBlob, {
       contentType: audioBlob.type,
-      upsert: false,
+      upsert: true,
     });
 
   if (error) {
