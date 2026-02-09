@@ -9,6 +9,7 @@ interface MeetingWithParts extends Meeting {
 interface MeetingCardProps {
   meeting: MeetingWithParts;
   onContinue: (meeting: MeetingWithParts) => void;
+  onSelect: (meeting: MeetingWithParts) => void;
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -52,7 +53,11 @@ function getStatusBadge(parts: RecordingPart[]) {
   }
   if (anyProcessing) {
     return (
-      <span className="inline-flex items-center rounded-full bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-600">
+      <span className="inline-flex items-center gap-1 rounded-full bg-primary-50 px-2 py-0.5 text-xs font-medium text-primary-600">
+        <svg className="h-3 w-3 animate-spin" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
         Processing
       </span>
     );
@@ -71,12 +76,15 @@ function getStatusBadge(parts: RecordingPart[]) {
   );
 }
 
-export default function MeetingCard({ meeting, onContinue }: MeetingCardProps) {
+export default function MeetingCard({ meeting, onContinue, onSelect }: MeetingCardProps) {
   const parts = meeting.recording_parts;
   const totalDuration = parts.reduce((sum, p) => sum + p.duration_seconds, 0);
 
   return (
-    <div className="rounded-xl border border-border bg-background p-4 transition-colors hover:border-primary-200">
+    <div
+      className="rounded-xl border border-border bg-background p-4 transition-colors hover:border-primary-200 cursor-pointer"
+      onClick={() => onSelect(meeting)}
+    >
       {/* Header */}
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
@@ -118,7 +126,10 @@ export default function MeetingCard({ meeting, onContinue }: MeetingCardProps) {
       {/* Actions */}
       <div className="mt-3 flex items-center gap-2">
         <button
-          onClick={() => onContinue(meeting)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onContinue(meeting);
+          }}
           className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-surface transition-colors"
         >
           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
