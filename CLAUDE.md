@@ -144,6 +144,7 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - In Next.js API routes, prefer inline `createServerClient` with explicit cookie handling over imported server client — more reliable for auth
 - Supabase join queries (`!inner`) can fail silently — splitting into separate queries is more debuggable
 - Always return actual error messages from API routes during development (not just "Internal server error") to speed debugging
+- AssemblyAI API now requires explicit `speech_models` parameter (array) — e.g. `speech_models: ['universal-2']`. Omitting it causes a validation error. Valid options: `"universal-3-pro"`, `"universal-2"`
 
 ## Known Issues & Gotchas
 - Next.js 16 shows deprecation warning for middleware.ts — works fine, can migrate to proxy convention later
