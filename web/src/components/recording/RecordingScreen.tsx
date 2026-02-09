@@ -3,8 +3,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { useWakeLock } from '@/hooks/useWakeLock';
+import { useToast } from '@/contexts/ToastContext';
 import { uploadAudio } from '@/lib/uploadAudio';
 import { createClient } from '@/lib/supabase/client';
+import {
+  saveRecordingLocally,
+  updateRecordingStatus,
+  deleteLocalRecording,
+} from '@/lib/recordingStore';
 import Waveform from './Waveform';
 import ConsentReminder from './ConsentReminder';
 import type { Meeting } from '@/types/database';
@@ -39,6 +45,7 @@ export default function RecordingScreen({
   onComplete,
   onCancel,
 }: RecordingScreenProps) {
+  const { showToast } = useToast();
   const [showConsent, setShowConsent] = useState(true);
   const [saving, setSaving] = useState(false);
   const [meetingTitle, setMeetingTitle] = useState(
@@ -77,7 +84,7 @@ export default function RecordingScreen({
     onCancel();
   }, [resetRecording, wakeLock, onCancel]);
 
-  // Save the recording when we have the blob
+  // Save the recording: local backup first, then attempt upload
   const handleSave = useCallback(async () => {
     if (!audioBlob) return;
     setSaving(true);
@@ -85,76 +92,131 @@ export default function RecordingScreen({
     const supabase = createClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
+      showToast({ message: 'Authentication error. Please log in again.', type: 'error' });
       setSaving(false);
       return;
     }
 
-    let meetingId: string | undefined = existingMeeting?.id;
     const partNumber = existingPartCount + 1;
+    const title = meetingTitle.trim() || `Meeting - ${new Date().toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    })}`;
 
-    // Create new meeting if needed
-    if (!meetingId) {
-      const title = meetingTitle.trim() || `Meeting - ${new Date().toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      })}`;
-
-      const { data, error: meetingError } = await supabase
-        .from('meetings')
-        .insert({
-          workspace_id: workspaceId,
-          user_id: user.id,
-          title,
-          recorded_at: new Date().toISOString(),
-        })
-        .select()
-        .single();
-
-      if (meetingError || !data) {
-        console.error('Failed to create meeting:', meetingError);
-        setSaving(false);
-        return;
-      }
-      meetingId = data.id;
-    }
-
-    if (!meetingId) {
-      console.error('No meeting ID available');
-      setSaving(false);
-      return;
-    }
-
-    // Upload audio
-    const filePath = await uploadAudio(user.id, meetingId, partNumber, audioBlob);
-    if (!filePath) {
-      console.error('Failed to upload audio');
-      setSaving(false);
-      return;
-    }
-
-    // Create recording part
-    const { error: partError } = await supabase
-      .from('recording_parts')
-      .insert({
-        meeting_id: meetingId,
-        part_number: partNumber,
-        audio_file_path: filePath,
-        duration_seconds: duration,
-        recorded_at: new Date().toISOString(),
+    // STEP 1: Save to IndexedDB FIRST (local backup — recording is now safe)
+    let localId: string | null = null;
+    try {
+      localId = await saveRecordingLocally({
+        audioBlob,
+        mimeType: audioBlob.type,
+        durationSeconds: duration,
+        workspaceId,
+        meetingId: existingMeeting?.id || null,
+        meetingTitle: title,
+        existingMeetingId: existingMeeting?.id || null,
+        partNumber,
+        userId: user.id,
       });
+    } catch (err) {
+      console.error('IndexedDB save failed:', err);
+      // Continue anyway — attempt direct upload
+    }
 
-    if (partError) {
-      console.error('Failed to save recording part:', partError);
-      setSaving(false);
-      return;
+    // STEP 2: Attempt upload sequence
+    let meetingId: string | undefined = existingMeeting?.id;
+    let uploadSucceeded = false;
+
+    try {
+      // Create meeting if needed
+      if (!meetingId) {
+        const { data, error: meetingError } = await supabase
+          .from('meetings')
+          .insert({
+            workspace_id: workspaceId,
+            user_id: user.id,
+            title,
+            recorded_at: new Date().toISOString(),
+          })
+          .select()
+          .single();
+
+        if (meetingError || !data) {
+          throw new Error(`Meeting creation failed: ${meetingError?.message || 'Unknown error'}`);
+        }
+        meetingId = data.id;
+
+        // Persist meetingId to IndexedDB so retries don't create duplicates
+        if (localId) {
+          await updateRecordingStatus(localId, { meetingId });
+        }
+      }
+
+      if (!meetingId) {
+        throw new Error('No meeting ID available');
+      }
+
+      // Upload audio
+      const filePath = await uploadAudio(user.id, meetingId, partNumber, audioBlob);
+      if (!filePath) {
+        throw new Error('Audio upload failed — check your network connection');
+      }
+
+      // Create recording part
+      const { error: partError } = await supabase
+        .from('recording_parts')
+        .insert({
+          meeting_id: meetingId,
+          part_number: partNumber,
+          audio_file_path: filePath,
+          duration_seconds: duration,
+          recorded_at: new Date().toISOString(),
+        });
+
+      if (partError) {
+        throw new Error(`Database save failed: ${partError.message}`);
+      }
+
+      uploadSucceeded = true;
+    } catch (err) {
+      console.error('Upload failed:', err);
+      if (localId) {
+        await updateRecordingStatus(localId, {
+          status: 'pending',
+          lastError: err instanceof Error ? err.message : 'Unknown error',
+          lastAttemptAt: new Date().toISOString(),
+          uploadAttempts: 1,
+          meetingId: meetingId || null,
+        });
+      }
+    }
+
+    // STEP 3: Show appropriate toast and exit
+    if (uploadSucceeded) {
+      if (localId) await deleteLocalRecording(localId);
+      showToast({ message: 'Recording saved successfully', type: 'success' });
+    } else if (localId) {
+      showToast({
+        message: 'Upload failed \u2014 recording saved locally. Will sync when connection improves.',
+        type: 'error',
+        duration: 10000,
+      });
+    } else {
+      showToast({
+        message: 'Upload failed. Please try again.',
+        type: 'error',
+      });
     }
 
     setSaving(false);
-    onComplete(meetingId);
-  }, [audioBlob, existingMeeting, existingPartCount, meetingTitle, workspaceId, duration, onComplete]);
+    if (meetingId) {
+      onComplete(meetingId);
+    } else {
+      onCancel();
+    }
+  }, [audioBlob, existingMeeting, existingPartCount, meetingTitle, workspaceId, duration, onComplete, onCancel, showToast]);
 
   // Handle cancel when consent is declined
   useEffect(() => {

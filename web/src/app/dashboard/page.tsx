@@ -7,9 +7,12 @@ import MobileHeader from '@/components/layout/MobileHeader';
 import CreateWorkspaceModal from '@/components/workspace/CreateWorkspaceModal';
 import RecordingScreen from '@/components/recording/RecordingScreen';
 import MeetingCard from '@/components/meeting/MeetingCard';
+import PendingRecordingsBanner from '@/components/recording/PendingRecordingsBanner';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
+import { usePendingUploads } from '@/hooks/usePendingUploads';
 import { createClient } from '@/lib/supabase/client';
 import type { Workspace, Meeting, RecordingPart } from '@/types/database';
+import type { PendingRecording } from '@/lib/recordingStore';
 
 interface MeetingWithParts extends Meeting {
   recording_parts: RecordingPart[];
@@ -17,6 +20,14 @@ interface MeetingWithParts extends Meeting {
 
 export default function DashboardPage() {
   const { workspaces, loading, createWorkspace } = useWorkspaces();
+  const {
+    pendingRecordings,
+    isRetrying,
+    retryAll,
+    retryOne,
+    discardOne,
+    refreshPending,
+  } = usePendingUploads();
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [activeTab, setActiveTab] = useState<'workspaces' | 'recordings' | 'settings'>('recordings');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -82,6 +93,7 @@ export default function DashboardPage() {
   function handleRecordingComplete() {
     setIsRecording(false);
     setContinueMeeting(null);
+    refreshPending();
     if (selectedWorkspace) {
       fetchMeetings(selectedWorkspace.id);
     }
@@ -90,6 +102,7 @@ export default function DashboardPage() {
   function handleRecordingCancel() {
     setIsRecording(false);
     setContinueMeeting(null);
+    refreshPending();
   }
 
   function handleRefreshMeetings() {
@@ -189,6 +202,13 @@ export default function DashboardPage() {
               workspace={selectedWorkspace}
               meetings={meetings}
               meetingsLoading={meetingsLoading}
+              pendingRecordings={pendingRecordings.filter(
+                (r) => r.workspaceId === selectedWorkspace.id
+              )}
+              isRetrying={isRetrying}
+              onRetryAll={retryAll}
+              onRetryOne={retryOne}
+              onDiscardOne={discardOne}
               onStartRecording={handleStartRecording}
               onContinueMeeting={handleContinueMeeting}
               onRefreshMeetings={handleRefreshMeetings}
@@ -254,6 +274,11 @@ function WorkspaceView({
   workspace,
   meetings,
   meetingsLoading,
+  pendingRecordings,
+  isRetrying,
+  onRetryAll,
+  onRetryOne,
+  onDiscardOne,
   onStartRecording,
   onContinueMeeting,
   onRefreshMeetings,
@@ -263,6 +288,11 @@ function WorkspaceView({
   workspace: Workspace;
   meetings: MeetingWithParts[];
   meetingsLoading: boolean;
+  pendingRecordings: PendingRecording[];
+  isRetrying: boolean;
+  onRetryAll: () => Promise<void>;
+  onRetryOne: (id: string) => Promise<boolean>;
+  onDiscardOne: (id: string) => Promise<void>;
   onStartRecording: () => void;
   onContinueMeeting: (meeting: MeetingWithParts) => void;
   onRefreshMeetings: () => void;
@@ -292,6 +322,17 @@ function WorkspaceView({
           Record
         </button>
       </div>
+
+      {/* Pending recordings banner */}
+      {pendingRecordings.length > 0 && (
+        <PendingRecordingsBanner
+          pendingRecordings={pendingRecordings}
+          isRetrying={isRetrying}
+          onRetryAll={onRetryAll}
+          onRetryOne={onRetryOne}
+          onDiscardOne={onDiscardOne}
+        />
+      )}
 
       {/* Meetings list */}
       {meetingsLoading ? (
