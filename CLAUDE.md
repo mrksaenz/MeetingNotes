@@ -61,6 +61,22 @@ A responsive web application for meeting notes with audio recording, AI-powered 
     - updated_at triggers
 - **Next Steps:** Wire up recording functionality, deploy to Vercel
 
+### Session 2 (continued) - February 9, 2026
+- **Status:** Deployed to Vercel + built recording functionality
+- **Vercel deployment fix:** 404 error caused by root directory not set. `vercel.json` does NOT support `rootDirectory` — must set it in Vercel dashboard (Settings → General → Root Directory → `web`).
+- **Built (recording & multi-part meetings):**
+  - Audio recording via MediaRecorder API (WebM/Opus, MP3 fallback)
+  - Real-time waveform visualization using Canvas API + AnalyserNode
+  - Screen Wake Lock API to keep phone screen on during recording
+  - Consent reminder dialog before every recording
+  - Pause/resume/stop controls with duration timer
+  - Multi-part meeting support: new meetings or "Continue Meeting" flow
+  - Audio upload to Supabase Storage (`recordings` bucket, user-scoped paths)
+  - Meeting cards with nested parts list and processing status badges
+  - Floating record button (mobile) + toolbar button (desktop)
+  - Full-screen recording mode
+- **Next Steps:** AI processing integration (AssemblyAI + Claude Haiku), transcription display
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)
@@ -69,12 +85,23 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - RLS policies enforce data isolation: users only see their own data
 - Recording parts linked to meetings via foreign key; transcriptions linked to parts; summaries linked to transcriptions
 
+## Component Architecture
+- `useAudioRecorder` hook — MediaRecorder + AnalyserNode, returns state/duration/waveformData/blob
+- `useWakeLock` hook — Screen Wake Lock API, auto-releases on cleanup
+- `Waveform` component — Canvas-based, renders amplitude bars from audio analysis data
+- `RecordingScreen` — Full-screen recording UI with consent → record → save flow
+- `MeetingCard` — Shows meeting with nested parts, status badges, continue button
+- `uploadAudio()` — Uploads blob to Supabase Storage at `{userId}/{meetingId}/part_{n}.{ext}`
+
 ## Lessons Learned
 - Next.js 16 (create-next-app@latest) now uses Turbopack by default and has deprecated `middleware.ts` in favor of `proxy` convention — but middleware still works
 - Google Fonts fail in environments without internet access — use system fonts as fallback
 - `.gitignore` pattern `.env*` also catches `.env.example` — need `!.env.example` exception
 - Tailwind CSS v4 uses `@theme inline` blocks instead of `tailwind.config.js` for custom theming
+- `vercel.json` does NOT support `rootDirectory` property — must be set in Vercel dashboard only
+- MediaRecorder MIME type support varies: check `isTypeSupported()` and fallback gracefully
 
 ## Known Issues & Gotchas
 - Next.js 16 shows deprecation warning for middleware.ts — works fine, can migrate to proxy convention later
 - Database migration must be run manually in Supabase SQL Editor (no CLI in this env)
+- Wake Lock API not supported on all browsers — fails silently, recording still works
