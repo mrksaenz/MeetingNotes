@@ -7,7 +7,6 @@ import MobileHeader from '@/components/layout/MobileHeader';
 import CreateWorkspaceModal from '@/components/workspace/CreateWorkspaceModal';
 import RecordingScreen from '@/components/recording/RecordingScreen';
 import MeetingCard from '@/components/meeting/MeetingCard';
-import MeetingDetail from '@/components/meeting/MeetingDetail';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { createClient } from '@/lib/supabase/client';
 import type { Workspace, Meeting, RecordingPart } from '@/types/database';
@@ -29,7 +28,6 @@ export default function DashboardPage() {
   // Meetings state
   const [meetings, setMeetings] = useState<MeetingWithParts[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(false);
-  const [selectedMeeting, setSelectedMeeting] = useState<MeetingWithParts | null>(null);
 
   const supabase = createClient();
 
@@ -55,7 +53,6 @@ export default function DashboardPage() {
 
   // Fetch meetings when workspace changes
   useEffect(() => {
-    setSelectedMeeting(null);
     if (selectedWorkspace) {
       fetchMeetings(selectedWorkspace.id);
     } else {
@@ -94,22 +91,9 @@ export default function DashboardPage() {
     setContinueMeeting(null);
   }
 
-  function handleSelectMeeting(meeting: MeetingWithParts) {
-    setSelectedMeeting(meeting);
-  }
-
   function handleRefreshMeetings() {
     if (selectedWorkspace) {
-      fetchMeetings(selectedWorkspace.id).then(() => {
-        // Update selectedMeeting with fresh data
-        if (selectedMeeting) {
-          setMeetings((prev) => {
-            const updated = prev.find((m) => m.id === selectedMeeting.id);
-            if (updated) setSelectedMeeting(updated);
-            return prev;
-          });
-        }
-      });
+      fetchMeetings(selectedWorkspace.id);
     }
   }
 
@@ -169,12 +153,6 @@ export default function DashboardPage() {
               hasWorkspaces={workspaces.length > 0}
               onCreateWorkspace={() => setShowCreateModal(true)}
             />
-          ) : selectedMeeting ? (
-            <MeetingDetail
-              meeting={selectedMeeting}
-              onBack={() => setSelectedMeeting(null)}
-              onRefresh={handleRefreshMeetings}
-            />
           ) : (
             <WorkspaceView
               workspace={selectedWorkspace}
@@ -182,7 +160,7 @@ export default function DashboardPage() {
               meetingsLoading={meetingsLoading}
               onStartRecording={handleStartRecording}
               onContinueMeeting={handleContinueMeeting}
-              onSelectMeeting={handleSelectMeeting}
+              onRefreshMeetings={handleRefreshMeetings}
             />
           )}
         </main>
@@ -245,14 +223,14 @@ function WorkspaceView({
   meetingsLoading,
   onStartRecording,
   onContinueMeeting,
-  onSelectMeeting,
+  onRefreshMeetings,
 }: {
   workspace: Workspace;
   meetings: MeetingWithParts[];
   meetingsLoading: boolean;
   onStartRecording: () => void;
   onContinueMeeting: (meeting: MeetingWithParts) => void;
-  onSelectMeeting: (meeting: MeetingWithParts) => void;
+  onRefreshMeetings: () => void;
 }) {
   return (
     <div>
@@ -296,7 +274,7 @@ function WorkspaceView({
               key={meeting.id}
               meeting={meeting}
               onContinue={onContinueMeeting}
-              onSelect={onSelectMeeting}
+              onRefresh={onRefreshMeetings}
             />
           ))}
         </div>
