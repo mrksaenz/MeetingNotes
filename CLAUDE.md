@@ -77,6 +77,23 @@ A responsive web application for meeting notes with audio recording, AI-powered 
   - Full-screen recording mode
 - **Next Steps:** AI processing integration (AssemblyAI + Claude Haiku), transcription display
 
+### Session 2 (continued, part 2) - February 9, 2026
+- **Status:** Built full AI processing pipeline
+- **Built:**
+  - `/api/process` API route — server-side processing pipeline
+  - AssemblyAI integration — submit audio URL, poll for completion, speaker diarization
+  - Claude Haiku 4.5 integration — structured JSON summarization via Anthropic SDK
+  - Processing trigger modal with 3-tier selection (transcription only / summary / full analysis)
+  - Meeting detail view with:
+    - Executive summary, key points, decisions, action items sections
+    - Speaker-separated transcription with timestamps
+    - Auto-polling (5s) while processing is in progress
+  - Supabase service client for server-side ops (bypasses RLS)
+  - Usage logging (tracks cost per processing action)
+  - Clickable meeting cards → drill into detail view
+- **Needs from Mark:** AssemblyAI API key, Anthropic API key, Supabase service role key
+- **Next Steps:** Testing end-to-end with real API keys, mobile UX polish
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)
@@ -92,6 +109,11 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - `RecordingScreen` — Full-screen recording UI with consent → record → save flow
 - `MeetingCard` — Shows meeting with nested parts, status badges, continue button
 - `uploadAudio()` — Uploads blob to Supabase Storage at `{userId}/{meetingId}/part_{n}.{ext}`
+- `MeetingDetail` — Full meeting view with transcription/summary display, process button, auto-poll
+- `ProcessModal` — 3-tier processing selector (transcription only / summary / full analysis)
+- `/api/process` route — Server-side: auth → signed URL → AssemblyAI → Claude Haiku → save to DB
+- `transcribeAudio()` — AssemblyAI: submit job, poll 5s intervals, return text + utterances
+- `summarizeTranscription()` — Claude Haiku: structured JSON output (summary, key points, decisions, actions)
 
 ## Lessons Learned
 - Next.js 16 (create-next-app@latest) now uses Turbopack by default and has deprecated `middleware.ts` in favor of `proxy` convention — but middleware still works
@@ -101,7 +123,14 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - `vercel.json` does NOT support `rootDirectory` property — must be set in Vercel dashboard only
 - MediaRecorder MIME type support varies: check `isTypeSupported()` and fallback gracefully
 
+## Lessons Learned (AI Processing)
+- AssemblyAI polling can take minutes for long recordings — UI auto-polls every 5s
+- Claude Haiku JSON output sometimes includes markdown code blocks — strip them before parsing
+- Supabase service role client needed for server-side ops that bypass RLS
+- Processing runs synchronously in the API route — works for MVP but may need queue for scale
+
 ## Known Issues & Gotchas
 - Next.js 16 shows deprecation warning for middleware.ts — works fine, can migrate to proxy convention later
 - Database migration must be run manually in Supabase SQL Editor (no CLI in this env)
 - Wake Lock API not supported on all browsers — fails silently, recording still works
+- API route timeout on Vercel is 60s (Hobby) / 300s (Pro) — long recordings may need background processing
