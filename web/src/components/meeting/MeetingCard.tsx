@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import MeetingNotesIcon from '@/components/icons/MeetingNotesIcon';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import ProcessModal from './ProcessModal';
 import type { Meeting, RecordingPart, Transcription, Summary, ProcessingLevel } from '@/types/database';
 
@@ -18,6 +19,8 @@ interface MeetingCardProps {
   meeting: MeetingWithParts;
   onContinue: (meeting: MeetingWithParts) => void;
   onRefresh: () => void;
+  onDelete: (meetingId: string) => Promise<void>;
+  onArchive: (meetingId: string) => Promise<void>;
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -110,12 +113,15 @@ function truncateText(text: string, maxLength: number = 120): string {
   return text.slice(0, maxLength).trimEnd() + '...';
 }
 
-export default function MeetingCard({ meeting, onContinue, onRefresh }: MeetingCardProps) {
+export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, onArchive }: MeetingCardProps) {
   const parts = meeting.recording_parts;
   const totalDuration = parts.reduce((sum, p) => sum + p.duration_seconds, 0);
 
   // Track which parts are expanded
   const [expandedParts, setExpandedParts] = useState<Set<string>>(new Set());
+
+  // Delete/Archive confirmation
+  const [confirmAction, setConfirmAction] = useState<'delete' | 'archive' | null>(null);
 
   // Transcription data (lazy-loaded)
   const [transcriptions, setTranscriptions] = useState<Map<string, TranscriptionWithSummary>>(new Map());
@@ -301,6 +307,26 @@ export default function MeetingCard({ meeting, onContinue, onRefresh }: MeetingC
                 </button>
               )}
               {getStatusBadge(parts)}
+              {/* Archive button */}
+              <button
+                onClick={() => setConfirmAction('archive')}
+                className="rounded-md p-1.5 text-muted hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                title="Archive meeting"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" />
+                </svg>
+              </button>
+              {/* Delete button */}
+              <button
+                onClick={() => setConfirmAction('delete')}
+                className="rounded-md p-1.5 text-muted hover:text-accent-rose hover:bg-accent-rose/10 transition-colors"
+                title="Delete meeting"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                </svg>
+              </button>
             </div>
           </div>
 
@@ -447,6 +473,34 @@ export default function MeetingCard({ meeting, onContinue, onRefresh }: MeetingC
         onClose={() => setShowProcessModal(false)}
         onProcess={handleProcess}
         processing={processing}
+      />
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={confirmAction === 'delete'}
+        title="Delete meeting"
+        message={`Are you sure you want to delete "${meeting.title}"? This will permanently remove the meeting, all recordings, transcriptions, and summaries. This cannot be undone.`}
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        onConfirm={async () => {
+          setConfirmAction(null);
+          await onDelete(meeting.id);
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
+
+      {/* Archive confirmation */}
+      <ConfirmDialog
+        open={confirmAction === 'archive'}
+        title="Archive meeting"
+        message={`Are you sure you want to archive "${meeting.title}"? It will be hidden from the main view but can be restored later.`}
+        confirmLabel="Archive"
+        confirmVariant="primary"
+        onConfirm={async () => {
+          setConfirmAction(null);
+          await onArchive(meeting.id);
+        }}
+        onCancel={() => setConfirmAction(null)}
       />
     </>
   );

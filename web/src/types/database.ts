@@ -22,6 +22,7 @@ export interface Meeting {
   user_notes: string | null;
   is_pinned: boolean;
   is_favorite: boolean;
+  is_archived: boolean;
   created_at: string;
   updated_at: string;
 }
