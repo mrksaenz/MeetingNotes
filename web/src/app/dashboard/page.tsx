@@ -37,6 +37,7 @@ export default function DashboardPage() {
       .from('meetings')
       .select('*, recording_parts(*)')
       .eq('workspace_id', wsId)
+      .eq('is_archived', false)
       .order('recorded_at', { ascending: false });
 
     if (!error && data) {
@@ -94,6 +95,36 @@ export default function DashboardPage() {
   function handleRefreshMeetings() {
     if (selectedWorkspace) {
       fetchMeetings(selectedWorkspace.id);
+    }
+  }
+
+  async function handleDeleteMeeting(meetingId: string) {
+    // Find the meeting to get audio file paths for storage cleanup
+    const meeting = meetings.find((m) => m.id === meetingId);
+    if (!meeting) return;
+
+    // Delete audio files from storage
+    const filePaths = meeting.recording_parts
+      .map((p) => p.audio_file_path)
+      .filter(Boolean);
+    if (filePaths.length > 0) {
+      await supabase.storage.from('recordings').remove(filePaths);
+    }
+
+    // Delete the meeting (cascades to parts, transcriptions, summaries)
+    const { error } = await supabase.from('meetings').delete().eq('id', meetingId);
+    if (!error) {
+      setMeetings((prev) => prev.filter((m) => m.id !== meetingId));
+    }
+  }
+
+  async function handleArchiveMeeting(meetingId: string) {
+    const { error } = await supabase
+      .from('meetings')
+      .update({ is_archived: true })
+      .eq('id', meetingId);
+    if (!error) {
+      setMeetings((prev) => prev.filter((m) => m.id !== meetingId));
     }
   }
 
@@ -161,6 +192,8 @@ export default function DashboardPage() {
               onStartRecording={handleStartRecording}
               onContinueMeeting={handleContinueMeeting}
               onRefreshMeetings={handleRefreshMeetings}
+              onDeleteMeeting={handleDeleteMeeting}
+              onArchiveMeeting={handleArchiveMeeting}
             />
           )}
         </main>
@@ -224,6 +257,8 @@ function WorkspaceView({
   onStartRecording,
   onContinueMeeting,
   onRefreshMeetings,
+  onDeleteMeeting,
+  onArchiveMeeting,
 }: {
   workspace: Workspace;
   meetings: MeetingWithParts[];
@@ -231,6 +266,8 @@ function WorkspaceView({
   onStartRecording: () => void;
   onContinueMeeting: (meeting: MeetingWithParts) => void;
   onRefreshMeetings: () => void;
+  onDeleteMeeting: (meetingId: string) => Promise<void>;
+  onArchiveMeeting: (meetingId: string) => Promise<void>;
 }) {
   return (
     <div>
@@ -275,6 +312,8 @@ function WorkspaceView({
               meeting={meeting}
               onContinue={onContinueMeeting}
               onRefresh={onRefreshMeetings}
+              onDelete={onDeleteMeeting}
+              onArchive={onArchiveMeeting}
             />
           ))}
         </div>
