@@ -39,11 +39,11 @@ export default function DashboardPage() {
   // Meetings state
   const [meetings, setMeetings] = useState<MeetingWithParts[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(false);
-
-  const supabase = createClient();
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   const fetchMeetings = useCallback(async (wsId: string) => {
     setMeetingsLoading(true);
+    const supabase = createClient();
     const { data, error } = await supabase
       .from('meetings')
       .select('*, recording_parts(*)')
@@ -51,6 +51,9 @@ export default function DashboardPage() {
       .eq('is_archived', false)
       .order('recorded_at', { ascending: false });
 
+    if (error) {
+      console.error('Failed to fetch meetings:', error);
+    }
     if (!error && data) {
       const sorted = data.map((m: MeetingWithParts) => ({
         ...m,
@@ -61,16 +64,16 @@ export default function DashboardPage() {
       setMeetings(sorted);
     }
     setMeetingsLoading(false);
-  }, [supabase]);
+  }, []);
 
-  // Fetch meetings when workspace changes
+  // Fetch meetings when workspace changes or after recording completes
   useEffect(() => {
     if (selectedWorkspace) {
       fetchMeetings(selectedWorkspace.id);
     } else {
       setMeetings([]);
     }
-  }, [selectedWorkspace, fetchMeetings]);
+  }, [selectedWorkspace, fetchMeetings, refreshTrigger]);
 
   async function handleCreateWorkspace(name: string, color: string) {
     const ws = await createWorkspace(name, color);
@@ -94,9 +97,7 @@ export default function DashboardPage() {
     setIsRecording(false);
     setContinueMeeting(null);
     refreshPending();
-    if (selectedWorkspace) {
-      fetchMeetings(selectedWorkspace.id);
-    }
+    setRefreshTrigger((prev) => prev + 1);
   }
 
   function handleRecordingCancel() {
@@ -112,6 +113,7 @@ export default function DashboardPage() {
   }
 
   async function handleDeleteMeeting(meetingId: string) {
+    const supabase = createClient();
     // Find the meeting to get audio file paths for storage cleanup
     const meeting = meetings.find((m) => m.id === meetingId);
     if (!meeting) return;
@@ -132,6 +134,7 @@ export default function DashboardPage() {
   }
 
   async function handleArchiveMeeting(meetingId: string) {
+    const supabase = createClient();
     const { error } = await supabase
       .from('meetings')
       .update({ is_archived: true })
