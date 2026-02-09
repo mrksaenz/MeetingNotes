@@ -94,6 +94,19 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - **Needs from Mark:** AssemblyAI API key, Anthropic API key, Supabase service role key
 - **Next Steps:** Testing end-to-end with real API keys, mobile UX polish
 
+### Session 2 (continued, part 3) - February 9, 2026
+- **Status:** Fixed 500 error on `/api/process` route
+- **Problem:** Processing failed with 500 error when user tried to process recordings
+- **Root cause investigation:** Potential auth issues in API route + join query reliability
+- **Fixes applied:**
+  - Replaced imported `createClient` with inline `createServerClient` + explicit cookie handling in the API route (more reliable auth in API routes)
+  - Split `recording_parts` + `meetings!inner` join query into two separate queries (avoids join-related failures with Supabase)
+  - Added `export const maxDuration = 300` for Vercel Pro 5-minute timeout
+  - Added `console.error` logging at each failure point for debugging
+  - Return actual error messages instead of generic "Internal server error"
+- **User action needed:** Reset failed recording parts' `processing_status` to `unprocessed` in Supabase dashboard, then retry processing
+- **Next Steps:** Verify end-to-end processing works, mobile UX polish
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)
@@ -128,6 +141,9 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - Claude Haiku JSON output sometimes includes markdown code blocks — strip them before parsing
 - Supabase service role client needed for server-side ops that bypass RLS
 - Processing runs synchronously in the API route — works for MVP but may need queue for scale
+- In Next.js API routes, prefer inline `createServerClient` with explicit cookie handling over imported server client — more reliable for auth
+- Supabase join queries (`!inner`) can fail silently — splitting into separate queries is more debuggable
+- Always return actual error messages from API routes during development (not just "Internal server error") to speed debugging
 
 ## Known Issues & Gotchas
 - Next.js 16 shows deprecation warning for middleware.ts — works fine, can migrate to proxy convention later
