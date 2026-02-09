@@ -29,6 +29,7 @@ export async function transcribeAudio(audioUrl: string): Promise<TranscriptionRe
     },
     body: JSON.stringify({
       audio_url: audioUrl,
+      speech_models: ['universal-2'],
       speaker_labels: true,
       language_code: 'en',
     }),
