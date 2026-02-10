@@ -107,6 +107,25 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - **User action needed:** Reset failed recording parts' `processing_status` to `unprocessed` in Supabase dashboard, then retry processing
 - **Next Steps:** Verify end-to-end processing works, mobile UX polish
 
+### Session 3 - February 10, 2026
+- **Status:** Fixed critical recording save bug + meetings not loading
+- **Problem:** User recorded a 40-minute meeting on phone — recording was lost. App had zero resilience: audio blobs only existed in React memory state, no local backup, no retry, no user feedback (errors silently logged to console).
+- **Root causes identified:**
+  1. `handleSave` in RecordingScreen had 4 failure points that all did `console.error()` + `return`, permanently losing the audio blob
+  2. `fetchMeetings` had `supabase` in its `useCallback` dependency causing unstable references
+  3. `fetchMeetings` query filtered on `is_archived` column (migration 002) which hadn't been run in production DB
+  4. No toast/notification system existed — users never saw success or failure messages
+- **Built (recording reliability + toast system):**
+  - IndexedDB recording store (`recordingStore.ts`) — saves audio blobs locally before upload attempt
+  - Toast notification system (`ToastContext` + `Toast.tsx` + `Providers.tsx`) — slide-up toasts with success/error/info types
+  - Rewrote RecordingScreen save flow: IndexedDB first → attempt upload → toast result → never lose data
+  - Pending uploads recovery hook (`usePendingUploads.ts`) — auto-retries on app load and on `online` event with exponential backoff
+  - Pending recordings banner on dashboard with per-item retry/discard
+  - Made `uploadAudio` retry-safe (`upsert: true`)
+  - Fixed `fetchMeetings`: moved `createClient()` inside callback (stable `[]` deps), added `refreshTrigger` state, added `is_archived` fallback query, added error logging
+- **Migration reminder:** `002_add_is_archived.sql` must be run manually in Supabase SQL Editor
+- **Next Steps:** Mark testing for the rest of the week, then continue with mobile UX polish
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)
@@ -118,10 +137,15 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 ## Component Architecture
 - `useAudioRecorder` hook — MediaRecorder + AnalyserNode, returns state/duration/waveformData/blob
 - `useWakeLock` hook — Screen Wake Lock API, auto-releases on cleanup
+- `usePendingUploads` hook — Checks IndexedDB for pending recordings, auto-retries on mount + `online` event, exponential backoff
 - `Waveform` component — Canvas-based, renders amplitude bars from audio analysis data
-- `RecordingScreen` — Full-screen recording UI with consent → record → save flow
+- `RecordingScreen` — Full-screen recording UI with consent → record → save flow (IndexedDB-first)
 - `MeetingCard` — Shows meeting with nested parts, status badges, continue button
-- `uploadAudio()` — Uploads blob to Supabase Storage at `{userId}/{meetingId}/part_{n}.{ext}`
+- `PendingRecordingsBanner` — Amber banner showing locally-saved recordings with Retry/Discard buttons
+- `uploadAudio()` — Uploads blob to Supabase Storage at `{userId}/{meetingId}/part_{n}.{ext}` (upsert: true for retry safety)
+- `recordingStore.ts` — IndexedDB wrapper: `saveRecordingLocally()`, `getPendingRecordings()`, `updateRecordingStatus()`, `deleteLocalRecording()`
+- `ToastContext` + `Toast.tsx` — Toast notification system, accessible via `useToast()` hook
+- `Providers.tsx` — Client component wrapper keeping layout.tsx as server component
 - `MeetingDetail` — Full meeting view with transcription/summary display, process button, auto-poll
 - `ProcessModal` — 3-tier processing selector (transcription only / summary / full analysis)
 - `/api/process` route — Server-side: auth → signed URL → AssemblyAI → Claude Haiku → save to DB
@@ -146,8 +170,20 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - Always return actual error messages from API routes during development (not just "Internal server error") to speed debugging
 - AssemblyAI API now requires explicit `speech_models` parameter (array) — e.g. `speech_models: ['universal-2']`. Omitting it causes a validation error. Valid options: `"universal-3-pro"`, `"universal-2"`
 
+## Lessons Learned (Recording Reliability)
+- Audio blobs in React state are ephemeral — ALWAYS persist to IndexedDB before attempting network operations
+- IndexedDB handles large Blobs natively (hundreds of MB) — far better than localStorage (5MB limit) for audio
+- `createBrowserClient` from `@supabase/ssr` may or may not return a singleton depending on version — don't rely on it for `useCallback` dependencies. Call `createClient()` inside the callback instead and use `[]` deps
+- Supabase queries fail silently if you filter on a column that doesn't exist (missing migration) — always add error logging and consider fallback queries
+- Use a `refreshTrigger` counter state in `useEffect` dependencies to force re-fetches after async operations complete — more reliable than depending on callback references
+- `uploadAudio` should use `upsert: true` so retries don't fail on duplicate files in Supabase Storage
+- Save the `meetingId` to IndexedDB immediately after meeting creation — prevents duplicate meetings on retry
+- Check for existing `recording_parts` rows before inserting during retry — prevents duplicate parts
+- Browser `online` event is a good trigger for retrying failed uploads — user records at venue, drives home, opens app on Wi-Fi
+
 ## Known Issues & Gotchas
 - Next.js 16 shows deprecation warning for middleware.ts — works fine, can migrate to proxy convention later
 - Database migration must be run manually in Supabase SQL Editor (no CLI in this env)
 - Wake Lock API not supported on all browsers — fails silently, recording still works
 - API route timeout on Vercel is 60s (Hobby) / 300s (Pro) — long recordings may need background processing
+- If `is_archived` column doesn't exist (migration 002 not run), `fetchMeetings` falls back to query without that filter — archive feature won't work but meetings will still load
