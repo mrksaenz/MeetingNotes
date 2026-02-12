@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import type { PendingRecording } from '@/lib/recordingStore';
+import type { UploadProgressMap } from '@/hooks/usePendingUploads';
+import UploadProgressBar from '@/components/ui/UploadProgressBar';
 
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600);
@@ -16,12 +18,14 @@ function formatDuration(seconds: number): string {
 export default function PendingRecordingsBanner({
   pendingRecordings,
   isRetrying,
+  uploadProgress,
   onRetryAll,
   onRetryOne,
   onDiscardOne,
 }: {
   pendingRecordings: PendingRecording[];
   isRetrying: boolean;
+  uploadProgress?: UploadProgressMap;
   onRetryAll: () => Promise<void>;
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
@@ -61,35 +65,50 @@ export default function PendingRecordingsBanner({
       </div>
 
       <div className="mt-3 space-y-2">
-        {pendingRecordings.map((rec) => (
-          <div key={rec.id} className="flex items-center justify-between rounded-lg bg-background px-3 py-2">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm text-foreground">{rec.meetingTitle}</p>
-              <p className="text-xs text-muted">
-                Part {rec.partNumber} &middot; {formatDuration(rec.durationSeconds)}
-                {rec.lastError && (
-                  <span className="text-accent-rose"> &middot; {rec.lastError}</span>
-                )}
-              </p>
+        {pendingRecordings.map((rec) => {
+          const progress = uploadProgress?.[rec.id];
+          const isUploading = retryingId === rec.id || !!progress;
+
+          return (
+            <div key={rec.id} className="rounded-lg bg-background px-3 py-2">
+              <div className="flex items-center justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm text-foreground">{rec.meetingTitle}</p>
+                  <p className="text-xs text-muted">
+                    Part {rec.partNumber} &middot; {formatDuration(rec.durationSeconds)}
+                    {!progress && rec.lastError && (
+                      <span className="text-accent-rose"> &middot; {rec.lastError}</span>
+                    )}
+                  </p>
+                </div>
+                <div className="ml-3 flex shrink-0 items-center gap-2">
+                  <button
+                    onClick={() => handleRetryOne(rec.id)}
+                    disabled={isUploading || isRetrying}
+                    className="text-xs font-medium text-primary-600 hover:text-primary-700 transition-colors disabled:opacity-50"
+                  >
+                    {isUploading ? 'Syncing...' : 'Retry'}
+                  </button>
+                  <button
+                    onClick={() => onDiscardOne(rec.id)}
+                    disabled={isUploading}
+                    className="text-xs text-muted hover:text-accent-rose transition-colors disabled:opacity-50"
+                  >
+                    Discard
+                  </button>
+                </div>
+              </div>
+              {progress && (
+                <div className="mt-2">
+                  <UploadProgressBar
+                    bytesUploaded={progress.bytesUploaded}
+                    bytesTotal={progress.bytesTotal}
+                  />
+                </div>
+              )}
             </div>
-            <div className="ml-3 flex shrink-0 items-center gap-2">
-              <button
-                onClick={() => handleRetryOne(rec.id)}
-                disabled={retryingId === rec.id || isRetrying}
-                className="text-xs font-medium text-primary-600 hover:text-primary-700 transition-colors disabled:opacity-50"
-              >
-                {retryingId === rec.id ? 'Syncing...' : 'Retry'}
-              </button>
-              <button
-                onClick={() => onDiscardOne(rec.id)}
-                disabled={retryingId === rec.id}
-                className="text-xs text-muted hover:text-accent-rose transition-colors disabled:opacity-50"
-              >
-                Discard
-              </button>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
