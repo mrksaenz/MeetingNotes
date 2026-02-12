@@ -3,14 +3,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useToast } from '@/contexts/ToastContext';
 import { createClient } from '@/lib/supabase/client';
-import { uploadAudio } from '@/lib/uploadAudio';
+import { uploadAudio, uploadSegment } from '@/lib/uploadAudio';
 import {
   getPendingRecordings,
   getPendingRecordingsForWorkspace,
   getRecordingById,
   updateRecordingStatus,
   deleteLocalRecording,
+  getPendingSegments,
+  getSegmentById,
+  updateSegmentStatus,
+  deleteSegmentLocally,
   type PendingRecording,
+  type PendingSegment,
 } from '@/lib/recordingStore';
 
 export interface UploadProgressMap {
@@ -20,6 +25,7 @@ export interface UploadProgressMap {
 interface UsePendingUploadsReturn {
   pendingCount: number;
   pendingRecordings: PendingRecording[];
+  pendingSegmentCount: number;
   isRetrying: boolean;
   uploadProgress: UploadProgressMap;
   retryAll: () => Promise<void>;
@@ -32,6 +38,7 @@ interface UsePendingUploadsReturn {
 export function usePendingUploads(): UsePendingUploadsReturn {
   const { showToast } = useToast();
   const [pendingRecordings, setPendingRecordings] = useState<PendingRecording[]>([]);
+  const [pendingSegmentCount, setPendingSegmentCount] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<UploadProgressMap>({});
   const retryingRef = useRef(false);
@@ -39,8 +46,11 @@ export function usePendingUploads(): UsePendingUploadsReturn {
   const refreshPending = useCallback(async () => {
     const pending = await getPendingRecordings();
     setPendingRecordings(pending);
+    const pendingSegs = await getPendingSegments();
+    setPendingSegmentCount(pendingSegs.length);
   }, []);
 
+  // Retry a single legacy full-recording upload
   const retryOne = useCallback(async (id: string): Promise<boolean> => {
     const recording = await getRecordingById(id);
     if (!recording) return false;
@@ -139,21 +149,83 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     }
   }, []);
 
+  // Retry a single pending segment
+  const retrySegment = useCallback(async (segment: PendingSegment): Promise<boolean> => {
+    await updateSegmentStatus(segment.id, { status: 'uploading' });
+
+    try {
+      const upload = uploadSegment(
+        segment.userId,
+        segment.meetingId,
+        segment.partNumber,
+        segment.segmentNumber,
+        segment.segmentBlob,
+        {
+          onProgress: (bytesUploaded, bytesTotal) => {
+            setUploadProgress((prev) => ({
+              ...prev,
+              [segment.id]: { bytesUploaded, bytesTotal },
+            }));
+          },
+        }
+      );
+
+      const filePath = await upload.promise;
+      setUploadProgress((prev) => {
+        const next = { ...prev };
+        delete next[segment.id];
+        return next;
+      });
+
+      if (!filePath) throw new Error('Segment upload failed');
+
+      // Create recording_segments row if it doesn't exist
+      const supabase = createClient();
+      await supabase.from('recording_segments').upsert({
+        recording_part_id: segment.recordingPartId,
+        segment_number: segment.segmentNumber,
+        audio_file_path: filePath,
+        duration_seconds: segment.durationSeconds,
+        byte_size: segment.segmentBlob.size,
+        upload_status: 'uploaded',
+        uploaded_at: new Date().toISOString(),
+      }, { onConflict: 'recording_part_id,segment_number' });
+
+      // Delete from IndexedDB
+      await deleteSegmentLocally(segment.id);
+      return true;
+    } catch (err) {
+      setUploadProgress((prev) => {
+        const next = { ...prev };
+        delete next[segment.id];
+        return next;
+      });
+      await updateSegmentStatus(segment.id, {
+        status: 'pending',
+        uploadAttempts: segment.uploadAttempts + 1,
+        lastAttemptAt: new Date().toISOString(),
+        lastError: err instanceof Error ? err.message : 'Unknown error',
+      });
+      return false;
+    }
+  }, []);
+
+  // Retry all pending recordings and segments
   const retryAll = useCallback(async () => {
     if (retryingRef.current) return;
     retryingRef.current = true;
     setIsRetrying(true);
 
-    const pending = await getPendingRecordings();
     let anySucceeded = false;
 
+    // Retry legacy full-recording uploads
+    const pending = await getPendingRecordings();
     for (const recording of pending) {
       if (recording.status !== 'pending') continue;
 
-      // Exponential backoff: skip if not enough time has passed
       const backoffMs = Math.min(
         1000 * Math.pow(2, recording.uploadAttempts),
-        5 * 60 * 1000 // Cap at 5 minutes
+        5 * 60 * 1000
       );
       if (recording.lastAttemptAt) {
         const elapsed = Date.now() - new Date(recording.lastAttemptAt).getTime();
@@ -161,19 +233,35 @@ export function usePendingUploads(): UsePendingUploadsReturn {
       }
 
       const success = await retryOne(recording.id);
-      if (success) {
-        anySucceeded = true;
+      if (success) anySucceeded = true;
+    }
+
+    // Retry pending segments
+    const pendingSegs = await getPendingSegments();
+    for (const segment of pendingSegs) {
+      if (segment.status !== 'pending') continue;
+
+      const backoffMs = Math.min(
+        1000 * Math.pow(2, segment.uploadAttempts),
+        5 * 60 * 1000
+      );
+      if (segment.lastAttemptAt) {
+        const elapsed = Date.now() - new Date(segment.lastAttemptAt).getTime();
+        if (elapsed < backoffMs) continue;
       }
+
+      const success = await retrySegment(segment);
+      if (success) anySucceeded = true;
     }
 
     if (anySucceeded) {
-      showToast({ message: 'Pending recording synced successfully', type: 'success' });
+      showToast({ message: 'Pending recordings synced successfully', type: 'success' });
     }
 
     await refreshPending();
     setIsRetrying(false);
     retryingRef.current = false;
-  }, [retryOne, refreshPending, showToast]);
+  }, [retryOne, retrySegment, refreshPending, showToast]);
 
   const discardOne = useCallback(async (id: string) => {
     await deleteLocalRecording(id);
@@ -203,9 +291,18 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     return () => window.removeEventListener('online', handleOnline);
   }, [retryAll]);
 
+  // Periodic retry every 2 minutes for pending uploads
+  useEffect(() => {
+    const interval = setInterval(() => {
+      retryAll();
+    }, 2 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [retryAll]);
+
   return {
     pendingCount: pendingRecordings.length,
     pendingRecordings,
+    pendingSegmentCount,
     isRetrying,
     uploadProgress,
     retryAll,

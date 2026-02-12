@@ -2,6 +2,9 @@
  * IndexedDB-based local storage for audio recording blobs.
  * Ensures recordings are persisted locally before upload attempts,
  * so they are never lost due to network or server failures.
+ *
+ * DB Version 2 adds a `pendingSegments` store for auto-segmented recordings
+ * that upload during recording (5-min segments).
  */
 
 export interface PendingRecording {
@@ -22,9 +25,27 @@ export interface PendingRecording {
   status: 'pending' | 'uploading' | 'uploaded';
 }
 
+export interface PendingSegment {
+  id: string;
+  segmentBlob: Blob;
+  segmentNumber: number;
+  recordingPartId: string;
+  meetingId: string;
+  partNumber: number;
+  userId: string;
+  mimeType: string;
+  durationSeconds: number;
+  createdAt: string;
+  uploadAttempts: number;
+  lastAttemptAt: string | null;
+  lastError: string | null;
+  status: 'pending' | 'uploading' | 'uploaded';
+}
+
 const DB_NAME = 'meeting-notes-recordings';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'pendingRecordings';
+const SEGMENTS_STORE_NAME = 'pendingSegments';
 
 let dbInstance: IDBDatabase | null = null;
 
@@ -48,10 +69,17 @@ function openDB(): Promise<IDBDatabase | null> {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
+        // V1: pending recordings store
         if (!db.objectStoreNames.contains(STORE_NAME)) {
           const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
           store.createIndex('workspaceId', 'workspaceId', { unique: false });
           store.createIndex('status', 'status', { unique: false });
+        }
+        // V2: pending segments store
+        if (!db.objectStoreNames.contains(SEGMENTS_STORE_NAME)) {
+          const segStore = db.createObjectStore(SEGMENTS_STORE_NAME, { keyPath: 'id' });
+          segStore.createIndex('recordingPartId', 'recordingPartId', { unique: false });
+          segStore.createIndex('status', 'status', { unique: false });
         }
       };
     } catch {
@@ -60,6 +88,10 @@ function openDB(): Promise<IDBDatabase | null> {
     }
   });
 }
+
+// ============================================================
+// Legacy full-recording operations (pendingRecordings store)
+// ============================================================
 
 export async function saveRecordingLocally(
   recording: Omit<PendingRecording, 'id' | 'createdAt' | 'uploadAttempts' | 'lastAttemptAt' | 'lastError' | 'status'>
@@ -204,5 +236,155 @@ export async function deleteLocalRecording(id: string): Promise<void> {
 
 export async function getPendingCount(): Promise<number> {
   const pending = await getPendingRecordings();
+  return pending.length;
+}
+
+// ============================================================
+// Segment operations (pendingSegments store)
+// ============================================================
+
+export async function saveSegmentLocally(
+  segment: Omit<PendingSegment, 'id' | 'createdAt' | 'uploadAttempts' | 'lastAttemptAt' | 'lastError' | 'status'>
+): Promise<string | null> {
+  const db = await openDB();
+  if (!db) return null;
+
+  const id = `${segment.recordingPartId}_seg_${segment.segmentNumber}`;
+  const record: PendingSegment = {
+    ...segment,
+    id,
+    createdAt: new Date().toISOString(),
+    uploadAttempts: 0,
+    lastAttemptAt: null,
+    lastError: null,
+    status: 'pending',
+  };
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(SEGMENTS_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(SEGMENTS_STORE_NAME);
+      const request = store.put(record);
+
+      request.onsuccess = () => resolve(id);
+      request.onerror = () => {
+        console.error('IndexedDB segment put failed:', request.error);
+        resolve(null);
+      };
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function getPendingSegments(): Promise<PendingSegment[]> {
+  const db = await openDB();
+  if (!db) return [];
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(SEGMENTS_STORE_NAME, 'readonly');
+      const store = tx.objectStore(SEGMENTS_STORE_NAME);
+      const request = store.getAll();
+
+      request.onsuccess = () => {
+        const all = request.result as PendingSegment[];
+        resolve(all.filter((s) => s.status !== 'uploaded'));
+      };
+      request.onerror = () => resolve([]);
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+export async function getPendingSegmentsForPart(
+  recordingPartId: string
+): Promise<PendingSegment[]> {
+  const db = await openDB();
+  if (!db) return [];
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(SEGMENTS_STORE_NAME, 'readonly');
+      const store = tx.objectStore(SEGMENTS_STORE_NAME);
+      const index = store.index('recordingPartId');
+      const request = index.getAll(recordingPartId);
+
+      request.onsuccess = () => {
+        const results = request.result as PendingSegment[];
+        resolve(results.filter((s) => s.status !== 'uploaded'));
+      };
+      request.onerror = () => resolve([]);
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
+export async function getSegmentById(id: string): Promise<PendingSegment | null> {
+  const db = await openDB();
+  if (!db) return null;
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(SEGMENTS_STORE_NAME, 'readonly');
+      const store = tx.objectStore(SEGMENTS_STORE_NAME);
+      const request = store.get(id);
+
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function updateSegmentStatus(
+  id: string,
+  updates: Partial<Pick<PendingSegment, 'status' | 'uploadAttempts' | 'lastAttemptAt' | 'lastError'>>
+): Promise<void> {
+  const db = await openDB();
+  if (!db) return;
+
+  const existing = await getSegmentById(id);
+  if (!existing) return;
+
+  const updated = { ...existing, ...updates };
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(SEGMENTS_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(SEGMENTS_STORE_NAME);
+      const request = store.put(updated);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function deleteSegmentLocally(id: string): Promise<void> {
+  const db = await openDB();
+  if (!db) return;
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(SEGMENTS_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(SEGMENTS_STORE_NAME);
+      const request = store.delete(id);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => resolve();
+    } catch {
+      resolve();
+    }
+  });
+}
+
+export async function getPendingSegmentCount(): Promise<number> {
+  const pending = await getPendingSegments();
   return pending.length;
 }
