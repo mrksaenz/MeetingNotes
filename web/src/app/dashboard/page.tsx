@@ -8,6 +8,7 @@ import CreateWorkspaceModal from '@/components/workspace/CreateWorkspaceModal';
 import RecordingScreen from '@/components/recording/RecordingScreen';
 import MeetingCard from '@/components/meeting/MeetingCard';
 import PendingRecordingsBanner from '@/components/recording/PendingRecordingsBanner';
+import ImportRecordingModal from '@/components/recording/ImportRecordingModal';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { usePendingUploads } from '@/hooks/usePendingUploads';
 import { createClient } from '@/lib/supabase/client';
@@ -30,11 +31,13 @@ export default function DashboardPage() {
     retryOne,
     discardOne,
     saveToDevice,
+    exportForTransfer,
     refreshPending,
   } = usePendingUploads();
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
   const [activeTab, setActiveTab] = useState<'workspaces' | 'recordings' | 'settings'>('recordings');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -236,11 +239,13 @@ export default function DashboardPage() {
               onRetryOne={retryOne}
               onDiscardOne={discardOne}
               onSaveToDevice={saveToDevice}
+              onExportForTransfer={exportForTransfer}
               onStartRecording={handleStartRecording}
               onContinueMeeting={handleContinueMeeting}
               onRefreshMeetings={handleRefreshMeetings}
               onDeleteMeeting={handleDeleteMeeting}
               onArchiveMeeting={handleArchiveMeeting}
+              onOpenImport={() => setShowImportModal(true)}
             />
           )}
         </main>
@@ -254,6 +259,18 @@ export default function DashboardPage() {
         open={showCreateModal}
         onClose={() => setShowCreateModal(false)}
         onCreate={handleCreateWorkspace}
+      />
+
+      {/* Import recording modal */}
+      <ImportRecordingModal
+        open={showImportModal}
+        onClose={() => setShowImportModal(false)}
+        onImportComplete={() => {
+          setShowImportModal(false);
+          setRefreshTrigger((prev) => prev + 1);
+        }}
+        workspaces={workspaces}
+        selectedWorkspaceId={selectedWorkspace?.id}
       />
     </div>
   );
@@ -309,11 +326,13 @@ function WorkspaceView({
   onRetryOne,
   onDiscardOne,
   onSaveToDevice,
+  onExportForTransfer,
   onStartRecording,
   onContinueMeeting,
   onRefreshMeetings,
   onDeleteMeeting,
   onArchiveMeeting,
+  onOpenImport,
 }: {
   workspace: Workspace;
   meetings: MeetingWithParts[];
@@ -326,11 +345,13 @@ function WorkspaceView({
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
   onSaveToDevice: (id: string) => Promise<boolean>;
+  onExportForTransfer: (id: string) => Promise<boolean>;
   onStartRecording: () => void;
   onContinueMeeting: (meeting: MeetingWithParts) => void;
   onRefreshMeetings: () => void;
   onDeleteMeeting: (meetingId: string) => Promise<void>;
   onArchiveMeeting: (meetingId: string) => Promise<void>;
+  onOpenImport: () => void;
 }) {
   return (
     <div>
@@ -344,16 +365,27 @@ function WorkspaceView({
           <h1 className="text-xl font-semibold text-foreground">{workspace.name}</h1>
         </div>
 
-        {/* Record button (desktop) */}
-        <button
-          onClick={onStartRecording}
-          className="hidden md:flex items-center gap-2 rounded-lg bg-accent-rose px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md active:scale-[0.98]"
-        >
-          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
-            <circle cx="12" cy="12" r="6" />
-          </svg>
-          Record
-        </button>
+        {/* Desktop action buttons */}
+        <div className="hidden md:flex items-center gap-2">
+          <button
+            onClick={onOpenImport}
+            className="flex items-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-surface transition-colors"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+            </svg>
+            Import
+          </button>
+          <button
+            onClick={onStartRecording}
+            className="flex items-center gap-2 rounded-lg bg-accent-rose px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:shadow-md active:scale-[0.98]"
+          >
+            <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="6" />
+            </svg>
+            Record
+          </button>
+        </div>
       </div>
 
       {/* Pending recordings banner */}
@@ -367,6 +399,7 @@ function WorkspaceView({
           onRetryOne={onRetryOne}
           onDiscardOne={onDiscardOne}
           onSaveToDevice={onSaveToDevice}
+          onExportForTransfer={onExportForTransfer}
         />
       )}
 
@@ -409,8 +442,16 @@ function WorkspaceView({
         </div>
       )}
 
-      {/* Floating record button (mobile) */}
-      <div className="fixed bottom-20 right-4 md:hidden z-30">
+      {/* Floating buttons (mobile) */}
+      <div className="fixed bottom-20 right-4 md:hidden z-30 flex flex-col items-center gap-3">
+        <button
+          onClick={onOpenImport}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md transition-all hover:shadow-lg active:scale-95"
+        >
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+          </svg>
+        </button>
         <button
           onClick={onStartRecording}
           className="flex h-14 w-14 items-center justify-center rounded-full bg-accent-rose text-white shadow-lg transition-all hover:shadow-xl active:scale-95"

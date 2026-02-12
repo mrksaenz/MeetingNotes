@@ -31,6 +31,7 @@ export default function PendingRecordingsBanner({
   onRetryOne,
   onDiscardOne,
   onSaveToDevice,
+  onExportForTransfer,
 }: {
   pendingRecordings: PendingRecording[];
   pendingSegmentCount?: number;
@@ -40,9 +41,11 @@ export default function PendingRecordingsBanner({
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
   onSaveToDevice: (id: string) => Promise<boolean>;
+  onExportForTransfer: (id: string) => Promise<boolean>;
 }) {
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   const totalPending = pendingRecordings.length + (pendingSegmentCount > 0 ? 1 : 0);
 
@@ -56,6 +59,12 @@ export default function PendingRecordingsBanner({
     setSavingId(id);
     await onSaveToDevice(id);
     setSavingId(null);
+  }
+
+  async function handleExportForTransfer(id: string) {
+    setExportingId(id);
+    await onExportForTransfer(id);
+    setExportingId(null);
   }
 
   if (totalPending === 0) return null;
@@ -118,6 +127,13 @@ export default function PendingRecordingsBanner({
                     )}
                   </div>
                   <div className="ml-3 flex shrink-0 items-center gap-2">
+                    <button
+                      onClick={() => handleExportForTransfer(rec.id)}
+                      disabled={exportingId === rec.id}
+                      className="text-xs font-medium text-sky-600 hover:text-sky-700 transition-colors disabled:opacity-50"
+                    >
+                      {exportingId === rec.id ? 'Bundling...' : 'Transfer'}
+                    </button>
                     <button
                       onClick={() => handleSaveToDevice(rec.id)}
                       disabled={isSaving}
