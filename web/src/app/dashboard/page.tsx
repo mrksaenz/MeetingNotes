@@ -46,17 +46,34 @@ export default function DashboardPage() {
   const fetchMeetings = useCallback(async (wsId: string) => {
     setMeetingsLoading(true);
     const supabase = createClient();
-    const { data, error } = await supabase
+
+    // Try with is_archived filter first; fall back without it
+    // (migration 002 may not have been run yet)
+    let data;
+    let error;
+
+    ({ data, error } = await supabase
       .from('meetings')
       .select('*, recording_parts(*)')
       .eq('workspace_id', wsId)
       .eq('is_archived', false)
-      .order('recorded_at', { ascending: false });
+      .order('recorded_at', { ascending: false }));
 
     if (error) {
-      console.error('Failed to fetch meetings:', error);
+      console.error('Failed to fetch meetings (with is_archived filter):', error.message, error.code);
+      // Retry without is_archived filter in case the column doesn't exist
+      ({ data, error } = await supabase
+        .from('meetings')
+        .select('*, recording_parts(*)')
+        .eq('workspace_id', wsId)
+        .order('recorded_at', { ascending: false }));
+
+      if (error) {
+        console.error('Failed to fetch meetings (fallback):', error.message, error.code);
+      }
     }
-    if (!error && data) {
+
+    if (data) {
       const sorted = data.map((m: MeetingWithParts) => ({
         ...m,
         recording_parts: (m.recording_parts || []).sort(
