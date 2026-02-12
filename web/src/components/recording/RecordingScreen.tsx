@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAudioRecorder } from '@/hooks/useAudioRecorder';
 import { useWakeLock } from '@/hooks/useWakeLock';
 import { useToast } from '@/contexts/ToastContext';
@@ -13,6 +13,7 @@ import {
 } from '@/lib/recordingStore';
 import Waveform from './Waveform';
 import ConsentReminder from './ConsentReminder';
+import UploadProgressBar from '@/components/ui/UploadProgressBar';
 import type { Meeting } from '@/types/database';
 
 interface RecordingScreenProps {
@@ -48,6 +49,8 @@ export default function RecordingScreen({
   const { showToast } = useToast();
   const [showConsent, setShowConsent] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ bytesUploaded: number; bytesTotal: number } | null>(null);
+  const uploadAbortRef = useRef<(() => void) | null>(null);
   const [meetingTitle, setMeetingTitle] = useState(
     existingMeeting?.title || ''
   );
@@ -158,11 +161,20 @@ export default function RecordingScreen({
         throw new Error('No meeting ID available');
       }
 
-      // Upload audio
-      const filePath = await uploadAudio(user.id, meetingId, partNumber, audioBlob);
+      // Upload audio with progress tracking
+      setUploadProgress({ bytesUploaded: 0, bytesTotal: audioBlob.size });
+      const upload = uploadAudio(user.id, meetingId, partNumber, audioBlob, {
+        onProgress: (bytesUploaded, bytesTotal) => {
+          setUploadProgress({ bytesUploaded, bytesTotal });
+        },
+      });
+      uploadAbortRef.current = upload.abort;
+      const filePath = await upload.promise;
+      uploadAbortRef.current = null;
       if (!filePath) {
         throw new Error('Audio upload failed — check your network connection');
       }
+      setUploadProgress(null);
 
       // Create recording part
       const { error: partError } = await supabase
@@ -182,6 +194,8 @@ export default function RecordingScreen({
       uploadSucceeded = true;
     } catch (err) {
       console.error('Upload failed:', err);
+      setUploadProgress(null);
+      uploadAbortRef.current = null;
       if (localId) {
         await updateRecordingStatus(localId, {
           status: 'pending',
@@ -307,6 +321,22 @@ export default function RecordingScreen({
               </div>
             )}
 
+            {/* Upload progress bar */}
+            {saving && uploadProgress && (
+              <div className="mb-2">
+                <UploadProgressBar
+                  bytesUploaded={uploadProgress.bytesUploaded}
+                  bytesTotal={uploadProgress.bytesTotal}
+                  label={
+                    uploadProgress.bytesTotal > 0 &&
+                    uploadProgress.bytesUploaded >= uploadProgress.bytesTotal
+                      ? 'Finishing up...'
+                      : 'Uploading recording...'
+                  }
+                />
+              </div>
+            )}
+
             <div className="flex gap-3">
               <button
                 onClick={handleDiscard}
@@ -320,7 +350,11 @@ export default function RecordingScreen({
                 disabled={saving}
                 className="flex-1 rounded-lg bg-primary-600 px-4 py-3 text-sm font-medium text-white hover:bg-primary-700 transition-colors disabled:opacity-50"
               >
-                {saving ? 'Saving...' : 'Save recording'}
+                {saving
+                  ? uploadProgress
+                    ? `Uploading... ${uploadProgress.bytesTotal > 0 ? Math.min(Math.round((uploadProgress.bytesUploaded / uploadProgress.bytesTotal) * 100), 100) : 0}%`
+                    : 'Saving...'
+                  : 'Save recording'}
               </button>
             </div>
           </div>

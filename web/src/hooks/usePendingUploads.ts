@@ -13,10 +13,15 @@ import {
   type PendingRecording,
 } from '@/lib/recordingStore';
 
+export interface UploadProgressMap {
+  [recordingId: string]: { bytesUploaded: number; bytesTotal: number };
+}
+
 interface UsePendingUploadsReturn {
   pendingCount: number;
   pendingRecordings: PendingRecording[];
   isRetrying: boolean;
+  uploadProgress: UploadProgressMap;
   retryAll: () => Promise<void>;
   retryOne: (id: string) => Promise<boolean>;
   discardOne: (id: string) => Promise<void>;
@@ -28,6 +33,7 @@ export function usePendingUploads(): UsePendingUploadsReturn {
   const { showToast } = useToast();
   const [pendingRecordings, setPendingRecordings] = useState<PendingRecording[]>([]);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressMap>({});
   const retryingRef = useRef(false);
 
   const refreshPending = useCallback(async () => {
@@ -69,13 +75,27 @@ export function usePendingUploads(): UsePendingUploadsReturn {
         throw new Error('No meeting ID available');
       }
 
-      // Upload audio
-      const filePath = await uploadAudio(
+      // Upload audio with progress tracking
+      const upload = uploadAudio(
         recording.userId,
         meetingId,
         recording.partNumber,
-        recording.audioBlob
+        recording.audioBlob,
+        {
+          onProgress: (bytesUploaded, bytesTotal) => {
+            setUploadProgress((prev) => ({
+              ...prev,
+              [id]: { bytesUploaded, bytesTotal },
+            }));
+          },
+        }
       );
+      const filePath = await upload.promise;
+      setUploadProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       if (!filePath) throw new Error('Upload failed');
 
       // Check for existing recording_parts to prevent duplicates
@@ -104,6 +124,11 @@ export function usePendingUploads(): UsePendingUploadsReturn {
       await deleteLocalRecording(id);
       return true;
     } catch (err) {
+      setUploadProgress((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
       await updateRecordingStatus(id, {
         status: 'pending',
         uploadAttempts: recording.uploadAttempts + 1,
@@ -182,6 +207,7 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     pendingCount: pendingRecordings.length,
     pendingRecordings,
     isRetrying,
+    uploadProgress,
     retryAll,
     retryOne,
     discardOne,

@@ -13,6 +13,7 @@ import { usePendingUploads } from '@/hooks/usePendingUploads';
 import { createClient } from '@/lib/supabase/client';
 import type { Workspace, Meeting, RecordingPart } from '@/types/database';
 import type { PendingRecording } from '@/lib/recordingStore';
+import type { UploadProgressMap } from '@/hooks/usePendingUploads';
 
 interface MeetingWithParts extends Meeting {
   recording_parts: RecordingPart[];
@@ -23,6 +24,7 @@ export default function DashboardPage() {
   const {
     pendingRecordings,
     isRetrying,
+    uploadProgress,
     retryAll,
     retryOne,
     discardOne,
@@ -209,6 +211,7 @@ export default function DashboardPage() {
                 (r) => r.workspaceId === selectedWorkspace.id
               )}
               isRetrying={isRetrying}
+              uploadProgress={uploadProgress}
               onRetryAll={retryAll}
               onRetryOne={retryOne}
               onDiscardOne={discardOne}
@@ -279,6 +282,7 @@ function WorkspaceView({
   meetingsLoading,
   pendingRecordings,
   isRetrying,
+  uploadProgress,
   onRetryAll,
   onRetryOne,
   onDiscardOne,
@@ -293,6 +297,7 @@ function WorkspaceView({
   meetingsLoading: boolean;
   pendingRecordings: PendingRecording[];
   isRetrying: boolean;
+  uploadProgress: UploadProgressMap;
   onRetryAll: () => Promise<void>;
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
@@ -331,6 +336,7 @@ function WorkspaceView({
         <PendingRecordingsBanner
           pendingRecordings={pendingRecordings}
           isRetrying={isRetrying}
+          uploadProgress={uploadProgress}
           onRetryAll={onRetryAll}
           onRetryOne={onRetryOne}
           onDiscardOne={onDiscardOne}
