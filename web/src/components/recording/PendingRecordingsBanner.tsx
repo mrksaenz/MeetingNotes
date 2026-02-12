@@ -15,6 +15,13 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(0)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 export default function PendingRecordingsBanner({
   pendingRecordings,
   pendingSegmentCount = 0,
@@ -23,6 +30,7 @@ export default function PendingRecordingsBanner({
   onRetryAll,
   onRetryOne,
   onDiscardOne,
+  onSaveToDevice,
 }: {
   pendingRecordings: PendingRecording[];
   pendingSegmentCount?: number;
@@ -31,8 +39,10 @@ export default function PendingRecordingsBanner({
   onRetryAll: () => Promise<void>;
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
+  onSaveToDevice: (id: string) => Promise<boolean>;
 }) {
   const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
 
   const totalPending = pendingRecordings.length + (pendingSegmentCount > 0 ? 1 : 0);
 
@@ -40,6 +50,12 @@ export default function PendingRecordingsBanner({
     setRetryingId(id);
     await onRetryOne(id);
     setRetryingId(null);
+  }
+
+  async function handleSaveToDevice(id: string) {
+    setSavingId(id);
+    await onSaveToDevice(id);
+    setSavingId(null);
   }
 
   if (totalPending === 0) return null;
@@ -82,6 +98,7 @@ export default function PendingRecordingsBanner({
           {pendingRecordings.map((rec) => {
             const progress = uploadProgress?.[rec.id];
             const isUploading = retryingId === rec.id || !!progress;
+            const isSaving = savingId === rec.id;
 
             return (
               <div key={rec.id} className="rounded-lg bg-background px-3 py-2">
@@ -90,12 +107,24 @@ export default function PendingRecordingsBanner({
                     <p className="truncate text-sm text-foreground">{rec.meetingTitle}</p>
                     <p className="text-xs text-muted">
                       Part {rec.partNumber} &middot; {formatDuration(rec.durationSeconds)}
-                      {!progress && rec.lastError && (
-                        <span className="text-accent-rose"> &middot; {rec.lastError}</span>
-                      )}
+                      {rec.audioBlob?.size ? (
+                        <> &middot; {formatFileSize(rec.audioBlob.size)}</>
+                      ) : null}
                     </p>
+                    {!progress && rec.lastError && (
+                      <p className="mt-0.5 text-xs text-accent-rose break-words">
+                        {rec.lastError}
+                      </p>
+                    )}
                   </div>
                   <div className="ml-3 flex shrink-0 items-center gap-2">
+                    <button
+                      onClick={() => handleSaveToDevice(rec.id)}
+                      disabled={isSaving}
+                      className="text-xs font-medium text-emerald-600 hover:text-emerald-700 transition-colors disabled:opacity-50"
+                    >
+                      {isSaving ? 'Saving...' : 'Save'}
+                    </button>
                     <button
                       onClick={() => handleRetryOne(rec.id)}
                       disabled={isUploading || isRetrying}

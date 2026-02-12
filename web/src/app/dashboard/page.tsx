@@ -29,6 +29,7 @@ export default function DashboardPage() {
     retryAll,
     retryOne,
     discardOne,
+    saveToDevice,
     refreshPending,
   } = usePendingUploads();
   const [selectedWorkspace, setSelectedWorkspace] = useState<Workspace | null>(null);
@@ -234,6 +235,7 @@ export default function DashboardPage() {
               onRetryAll={retryAll}
               onRetryOne={retryOne}
               onDiscardOne={discardOne}
+              onSaveToDevice={saveToDevice}
               onStartRecording={handleStartRecording}
               onContinueMeeting={handleContinueMeeting}
               onRefreshMeetings={handleRefreshMeetings}
@@ -306,6 +308,7 @@ function WorkspaceView({
   onRetryAll,
   onRetryOne,
   onDiscardOne,
+  onSaveToDevice,
   onStartRecording,
   onContinueMeeting,
   onRefreshMeetings,
@@ -322,6 +325,7 @@ function WorkspaceView({
   onRetryAll: () => Promise<void>;
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
+  onSaveToDevice: (id: string) => Promise<boolean>;
   onStartRecording: () => void;
   onContinueMeeting: (meeting: MeetingWithParts) => void;
   onRefreshMeetings: () => void;
@@ -362,6 +366,7 @@ function WorkspaceView({
           onRetryAll={onRetryAll}
           onRetryOne={onRetryOne}
           onDiscardOne={onDiscardOne}
+          onSaveToDevice={onSaveToDevice}
         />
       )}
 

@@ -8,6 +8,7 @@ import {
   getPendingRecordings,
   getPendingRecordingsForWorkspace,
   getRecordingById,
+  getRecordingBlob,
   updateRecordingStatus,
   deleteLocalRecording,
   getPendingSegments,
@@ -31,6 +32,7 @@ interface UsePendingUploadsReturn {
   retryAll: () => Promise<void>;
   retryOne: (id: string) => Promise<boolean>;
   discardOne: (id: string) => Promise<void>;
+  saveToDevice: (id: string) => Promise<boolean>;
   refreshPending: () => Promise<void>;
   getPendingForWorkspace: (workspaceId: string) => Promise<PendingRecording[]>;
 }
@@ -268,6 +270,53 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     await refreshPending();
   }, [refreshPending]);
 
+  const saveToDevice = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const result = await getRecordingBlob(id);
+      if (!result) {
+        showToast({ message: 'Recording not found in local storage', type: 'error' });
+        return false;
+      }
+
+      const { blob, fileName } = result;
+      const file = new File([blob], fileName, { type: blob.type });
+
+      // iOS Safari: use native share sheet so user can "Save to Files"
+      if (typeof navigator.share === 'function' && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: fileName });
+          showToast({ message: 'Recording saved successfully', type: 'success' });
+          return true;
+        } catch (shareErr) {
+          // User cancelled share sheet — not an error
+          if (shareErr instanceof Error && shareErr.name === 'AbortError') {
+            return false;
+          }
+          console.warn('Share failed, falling back to download:', shareErr);
+        }
+      }
+
+      // Fallback: trigger download via <a> element
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      showToast({ message: 'Download started', type: 'success' });
+      return true;
+    } catch (err) {
+      console.error('Save to device failed:', err);
+      showToast({
+        message: err instanceof Error ? err.message : 'Failed to save recording',
+        type: 'error',
+      });
+      return false;
+    }
+  }, [showToast]);
+
   const getPendingForWorkspace = useCallback(async (workspaceId: string) => {
     return getPendingRecordingsForWorkspace(workspaceId);
   }, []);
@@ -308,6 +357,7 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     retryAll,
     retryOne,
     discardOne,
+    saveToDevice,
     refreshPending,
     getPendingForWorkspace,
   };
