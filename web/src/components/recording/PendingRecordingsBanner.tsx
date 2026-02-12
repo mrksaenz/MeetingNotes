@@ -17,6 +17,7 @@ function formatDuration(seconds: number): string {
 
 export default function PendingRecordingsBanner({
   pendingRecordings,
+  pendingSegmentCount = 0,
   isRetrying,
   uploadProgress,
   onRetryAll,
@@ -24,6 +25,7 @@ export default function PendingRecordingsBanner({
   onDiscardOne,
 }: {
   pendingRecordings: PendingRecording[];
+  pendingSegmentCount?: number;
   isRetrying: boolean;
   uploadProgress?: UploadProgressMap;
   onRetryAll: () => Promise<void>;
@@ -32,11 +34,15 @@ export default function PendingRecordingsBanner({
 }) {
   const [retryingId, setRetryingId] = useState<string | null>(null);
 
+  const totalPending = pendingRecordings.length + (pendingSegmentCount > 0 ? 1 : 0);
+
   async function handleRetryOne(id: string) {
     setRetryingId(id);
     await onRetryOne(id);
     setRetryingId(null);
   }
+
+  if (totalPending === 0) return null;
 
   return (
     <div className="mb-4 rounded-xl border border-accent-amber/30 bg-accent-amber/5 p-4">
@@ -48,7 +54,13 @@ export default function PendingRecordingsBanner({
           </svg>
           <div>
             <p className="text-sm font-medium text-foreground">
-              {pendingRecordings.length} recording{pendingRecordings.length > 1 ? 's' : ''} saved locally
+              {pendingRecordings.length > 0 && (
+                <>{pendingRecordings.length} recording{pendingRecordings.length > 1 ? 's' : ''} saved locally</>
+              )}
+              {pendingRecordings.length > 0 && pendingSegmentCount > 0 && ' + '}
+              {pendingSegmentCount > 0 && (
+                <>{pendingSegmentCount} segment{pendingSegmentCount > 1 ? 's' : ''} pending</>
+              )}
             </p>
             <p className="text-xs text-muted">
               {isRetrying ? 'Syncing...' : 'Waiting for connection to sync'}
@@ -64,52 +76,64 @@ export default function PendingRecordingsBanner({
         </button>
       </div>
 
-      <div className="mt-3 space-y-2">
-        {pendingRecordings.map((rec) => {
-          const progress = uploadProgress?.[rec.id];
-          const isUploading = retryingId === rec.id || !!progress;
+      {/* Legacy full-recording items */}
+      {pendingRecordings.length > 0 && (
+        <div className="mt-3 space-y-2">
+          {pendingRecordings.map((rec) => {
+            const progress = uploadProgress?.[rec.id];
+            const isUploading = retryingId === rec.id || !!progress;
 
-          return (
-            <div key={rec.id} className="rounded-lg bg-background px-3 py-2">
-              <div className="flex items-center justify-between">
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-foreground">{rec.meetingTitle}</p>
-                  <p className="text-xs text-muted">
-                    Part {rec.partNumber} &middot; {formatDuration(rec.durationSeconds)}
-                    {!progress && rec.lastError && (
-                      <span className="text-accent-rose"> &middot; {rec.lastError}</span>
-                    )}
-                  </p>
+            return (
+              <div key={rec.id} className="rounded-lg bg-background px-3 py-2">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm text-foreground">{rec.meetingTitle}</p>
+                    <p className="text-xs text-muted">
+                      Part {rec.partNumber} &middot; {formatDuration(rec.durationSeconds)}
+                      {!progress && rec.lastError && (
+                        <span className="text-accent-rose"> &middot; {rec.lastError}</span>
+                      )}
+                    </p>
+                  </div>
+                  <div className="ml-3 flex shrink-0 items-center gap-2">
+                    <button
+                      onClick={() => handleRetryOne(rec.id)}
+                      disabled={isUploading || isRetrying}
+                      className="text-xs font-medium text-primary-600 hover:text-primary-700 transition-colors disabled:opacity-50"
+                    >
+                      {isUploading ? 'Syncing...' : 'Retry'}
+                    </button>
+                    <button
+                      onClick={() => onDiscardOne(rec.id)}
+                      disabled={isUploading}
+                      className="text-xs text-muted hover:text-accent-rose transition-colors disabled:opacity-50"
+                    >
+                      Discard
+                    </button>
+                  </div>
                 </div>
-                <div className="ml-3 flex shrink-0 items-center gap-2">
-                  <button
-                    onClick={() => handleRetryOne(rec.id)}
-                    disabled={isUploading || isRetrying}
-                    className="text-xs font-medium text-primary-600 hover:text-primary-700 transition-colors disabled:opacity-50"
-                  >
-                    {isUploading ? 'Syncing...' : 'Retry'}
-                  </button>
-                  <button
-                    onClick={() => onDiscardOne(rec.id)}
-                    disabled={isUploading}
-                    className="text-xs text-muted hover:text-accent-rose transition-colors disabled:opacity-50"
-                  >
-                    Discard
-                  </button>
-                </div>
+                {progress && (
+                  <div className="mt-2">
+                    <UploadProgressBar
+                      bytesUploaded={progress.bytesUploaded}
+                      bytesTotal={progress.bytesTotal}
+                    />
+                  </div>
+                )}
               </div>
-              {progress && (
-                <div className="mt-2">
-                  <UploadProgressBar
-                    bytesUploaded={progress.bytesUploaded}
-                    bytesTotal={progress.bytesTotal}
-                  />
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pending segments indicator */}
+      {pendingSegmentCount > 0 && (
+        <div className="mt-3 rounded-lg bg-background px-3 py-2">
+          <p className="text-xs text-muted">
+            {pendingSegmentCount} recording segment{pendingSegmentCount > 1 ? 's' : ''} will auto-sync when connection improves
+          </p>
+        </div>
+      )}
     </div>
   );
 }

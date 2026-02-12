@@ -23,6 +23,7 @@ export default function DashboardPage() {
   const { workspaces, loading, createWorkspace } = useWorkspaces();
   const {
     pendingRecordings,
+    pendingSegmentCount,
     isRetrying,
     uploadProgress,
     retryAll,
@@ -227,6 +228,7 @@ export default function DashboardPage() {
               pendingRecordings={pendingRecordings.filter(
                 (r) => r.workspaceId === selectedWorkspace.id
               )}
+              pendingSegmentCount={pendingSegmentCount}
               isRetrying={isRetrying}
               uploadProgress={uploadProgress}
               onRetryAll={retryAll}
@@ -298,6 +300,7 @@ function WorkspaceView({
   meetings,
   meetingsLoading,
   pendingRecordings,
+  pendingSegmentCount,
   isRetrying,
   uploadProgress,
   onRetryAll,
@@ -313,6 +316,7 @@ function WorkspaceView({
   meetings: MeetingWithParts[];
   meetingsLoading: boolean;
   pendingRecordings: PendingRecording[];
+  pendingSegmentCount: number;
   isRetrying: boolean;
   uploadProgress: UploadProgressMap;
   onRetryAll: () => Promise<void>;
@@ -349,9 +353,10 @@ function WorkspaceView({
       </div>
 
       {/* Pending recordings banner */}
-      {pendingRecordings.length > 0 && (
+      {(pendingRecordings.length > 0 || pendingSegmentCount > 0) && (
         <PendingRecordingsBanner
           pendingRecordings={pendingRecordings}
+          pendingSegmentCount={pendingSegmentCount}
           isRetrying={isRetrying}
           uploadProgress={uploadProgress}
           onRetryAll={onRetryAll}

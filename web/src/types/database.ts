@@ -35,6 +35,19 @@ export interface RecordingPart {
   duration_seconds: number;
   recorded_at: string;
   processing_status: ProcessingStatus;
+  segment_count: number | null;
+  created_at: string;
+}
+
+export interface RecordingSegment {
+  id: string;
+  recording_part_id: string;
+  segment_number: number;
+  audio_file_path: string;
+  duration_seconds: number;
+  byte_size: number | null;
+  upload_status: 'pending' | 'uploading' | 'uploaded' | 'failed';
+  uploaded_at: string | null;
   created_at: string;
 }
 

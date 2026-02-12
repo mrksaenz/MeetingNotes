@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { createServiceClient } from '@/lib/supabase/service';
-import { transcribeAudio } from '@/lib/assemblyai';
+import { transcribeAudio, transcribeSegments } from '@/lib/assemblyai';
 import { summarizeTranscription } from '@/lib/anthropic';
 import type { ProcessingLevel } from '@/types/database';
 import { cookies } from 'next/headers';
@@ -87,32 +87,74 @@ export async function POST(request: NextRequest) {
       .update({ processing_status: 'processing' })
       .eq('id', recordingPartId);
 
-    // Get a signed URL for the audio file
-    const { data: signedUrl, error: signedUrlError } = await serviceClient.storage
-      .from('recordings')
-      .createSignedUrl(part.audio_file_path, 3600); // 1 hour expiry
+    // Check for segments (new segmented recording) vs legacy single-file
+    const { data: segments } = await serviceClient
+      .from('recording_segments')
+      .select('*')
+      .eq('recording_part_id', recordingPartId)
+      .eq('upload_status', 'uploaded')
+      .order('segment_number', { ascending: true });
 
-    if (!signedUrl?.signedUrl) {
-      console.error('Signed URL error:', signedUrlError);
-      await serviceClient
-        .from('recording_parts')
-        .update({ processing_status: 'failed' })
-        .eq('id', recordingPartId);
-      return NextResponse.json({ error: 'Failed to get audio URL' }, { status: 500 });
-    }
+    const isSegmented = segments && segments.length > 0;
 
-    // Step 1: Transcribe with AssemblyAI
     let transcriptionResult;
-    try {
-      transcriptionResult = await transcribeAudio(signedUrl.signedUrl);
-    } catch (err) {
-      console.error('Transcription failed:', err);
-      await serviceClient
-        .from('recording_parts')
-        .update({ processing_status: 'failed' })
-        .eq('id', recordingPartId);
-      const message = err instanceof Error ? err.message : 'Transcription failed';
-      return NextResponse.json({ error: message }, { status: 500 });
+
+    if (isSegmented) {
+      // Segmented recording: download each segment and transcribe individually, then merge
+      try {
+        const segmentData: Array<{ audioData: Blob; durationSeconds: number }> = [];
+
+        for (const seg of segments) {
+          const { data: fileData, error: downloadError } = await serviceClient.storage
+            .from('recordings')
+            .download(seg.audio_file_path);
+
+          if (downloadError || !fileData) {
+            throw new Error(`Failed to download segment ${seg.segment_number}: ${downloadError?.message}`);
+          }
+
+          segmentData.push({
+            audioData: fileData,
+            durationSeconds: seg.duration_seconds,
+          });
+        }
+
+        transcriptionResult = await transcribeSegments(segmentData);
+      } catch (err) {
+        console.error('Segmented transcription failed:', err);
+        await serviceClient
+          .from('recording_parts')
+          .update({ processing_status: 'failed' })
+          .eq('id', recordingPartId);
+        const message = err instanceof Error ? err.message : 'Segmented transcription failed';
+        return NextResponse.json({ error: message }, { status: 500 });
+      }
+    } else {
+      // Legacy single-file recording: use signed URL approach
+      const { data: signedUrl, error: signedUrlError } = await serviceClient.storage
+        .from('recordings')
+        .createSignedUrl(part.audio_file_path, 3600); // 1 hour expiry
+
+      if (!signedUrl?.signedUrl) {
+        console.error('Signed URL error:', signedUrlError);
+        await serviceClient
+          .from('recording_parts')
+          .update({ processing_status: 'failed' })
+          .eq('id', recordingPartId);
+        return NextResponse.json({ error: 'Failed to get audio URL' }, { status: 500 });
+      }
+
+      try {
+        transcriptionResult = await transcribeAudio(signedUrl.signedUrl);
+      } catch (err) {
+        console.error('Transcription failed:', err);
+        await serviceClient
+          .from('recording_parts')
+          .update({ processing_status: 'failed' })
+          .eq('id', recordingPartId);
+        const message = err instanceof Error ? err.message : 'Transcription failed';
+        return NextResponse.json({ error: message }, { status: 500 });
+      }
     }
 
     // Save transcription
