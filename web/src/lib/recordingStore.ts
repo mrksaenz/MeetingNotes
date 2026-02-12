@@ -398,6 +398,16 @@ export async function deleteSegmentLocally(id: string): Promise<void> {
   });
 }
 
+export async function getPendingSegmentsForRecording(
+  meetingId: string,
+  partNumber: number,
+): Promise<PendingSegment[]> {
+  const all = await getPendingSegments();
+  return all
+    .filter((s) => s.meetingId === meetingId && s.partNumber === partNumber)
+    .sort((a, b) => a.segmentNumber - b.segmentNumber);
+}
+
 export async function getPendingSegmentCount(): Promise<number> {
   const pending = await getPendingSegments();
   return pending.length;

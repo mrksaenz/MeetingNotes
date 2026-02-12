@@ -12,12 +12,14 @@ import {
   updateRecordingStatus,
   deleteLocalRecording,
   getPendingSegments,
+  getPendingSegmentsForRecording,
   getSegmentById,
   updateSegmentStatus,
   deleteSegmentLocally,
   type PendingRecording,
   type PendingSegment,
 } from '@/lib/recordingStore';
+import { createTransferBundle } from '@/lib/transferBundle';
 
 export interface UploadProgressMap {
   [recordingId: string]: { bytesUploaded: number; bytesTotal: number };
@@ -33,6 +35,7 @@ interface UsePendingUploadsReturn {
   retryOne: (id: string) => Promise<boolean>;
   discardOne: (id: string) => Promise<void>;
   saveToDevice: (id: string) => Promise<boolean>;
+  exportForTransfer: (id: string) => Promise<boolean>;
   refreshPending: () => Promise<void>;
   getPendingForWorkspace: (workspaceId: string) => Promise<PendingRecording[]>;
 }
@@ -317,6 +320,82 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     }
   }, [showToast]);
 
+  const exportForTransfer = useCallback(async (id: string): Promise<boolean> => {
+    try {
+      const recording = await getRecordingById(id);
+      if (!recording) {
+        showToast({ message: 'Recording not found in local storage', type: 'error' });
+        return false;
+      }
+
+      // Gather related pending segments if this recording has a meetingId
+      let segments: PendingSegment[] | undefined;
+      if (recording.meetingId) {
+        segments = await getPendingSegmentsForRecording(
+          recording.meetingId,
+          recording.partNumber,
+        );
+        if (segments.length === 0) segments = undefined;
+      }
+
+      // Fetch workspace name for the manifest
+      let workspaceName: string | undefined;
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from('workspaces')
+          .select('name')
+          .eq('id', recording.workspaceId)
+          .single();
+        if (data) workspaceName = data.name;
+      } catch {
+        // Non-critical — proceed without workspace name
+      }
+
+      const { blob, fileName } = await createTransferBundle(recording, segments, workspaceName);
+      const file = new File([blob], fileName, { type: 'application/zip' });
+
+      // iOS Safari: use native share sheet (AirDrop is an option)
+      if (typeof navigator.share === 'function' && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: fileName });
+          showToast({
+            message: 'Transfer file created — import it on your desktop',
+            type: 'success',
+          });
+          return true;
+        } catch (shareErr) {
+          if (shareErr instanceof Error && shareErr.name === 'AbortError') {
+            return false; // User cancelled
+          }
+          console.warn('Share failed, falling back to download:', shareErr);
+        }
+      }
+
+      // Fallback: trigger download via <a> element
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      showToast({
+        message: 'Transfer file downloaded — import it on your desktop',
+        type: 'success',
+      });
+      return true;
+    } catch (err) {
+      console.error('Export for transfer failed:', err);
+      showToast({
+        message: err instanceof Error ? err.message : 'Failed to create transfer file',
+        type: 'error',
+      });
+      return false;
+    }
+  }, [showToast]);
+
   const getPendingForWorkspace = useCallback(async (workspaceId: string) => {
     return getPendingRecordingsForWorkspace(workspaceId);
   }, []);
@@ -358,6 +437,7 @@ export function usePendingUploads(): UsePendingUploadsReturn {
     retryOne,
     discardOne,
     saveToDevice,
+    exportForTransfer,
     refreshPending,
     getPendingForWorkspace,
   };
