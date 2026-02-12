@@ -234,6 +234,20 @@ export async function deleteLocalRecording(id: string): Promise<void> {
   });
 }
 
+export async function getRecordingBlob(id: string): Promise<{ blob: Blob; fileName: string } | null> {
+  const recording = await getRecordingById(id);
+  if (!recording || !recording.audioBlob) return null;
+
+  const ext = recording.mimeType?.includes('webm') ? 'webm' : 'mp4';
+  const safeTitle = recording.meetingTitle
+    .replace(/[^a-zA-Z0-9 _-]/g, '')
+    .replace(/\s+/g, '_')
+    .substring(0, 60);
+  const fileName = `${safeTitle}_part${recording.partNumber}.${ext}`;
+
+  return { blob: recording.audioBlob, fileName };
+}
+
 export async function getPendingCount(): Promise<number> {
   const pending = await getPendingRecordings();
   return pending.length;
