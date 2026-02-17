@@ -21,6 +21,7 @@ interface MeetingCardProps {
   onRefresh: () => void;
   onDelete: (meetingId: string) => Promise<void>;
   onArchive: (meetingId: string) => Promise<void>;
+  onViewDetail: (meeting: MeetingWithParts) => void;
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -113,7 +114,7 @@ function truncateText(text: string, maxLength: number = 120): string {
   return text.slice(0, maxLength).trimEnd() + '...';
 }
 
-export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, onArchive }: MeetingCardProps) {
+export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, onArchive, onViewDetail }: MeetingCardProps) {
   const parts = meeting.recording_parts;
   const totalDuration = parts.reduce((sum, p) => sum + p.duration_seconds, 0);
 
@@ -290,7 +291,12 @@ export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, 
         <div className="p-4">
           <div className="flex items-start justify-between">
             <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-foreground truncate">{meeting.title}</h3>
+              <button
+                onClick={() => onViewDetail(meeting)}
+                className="text-left font-medium text-foreground truncate block w-full hover:text-primary-600 transition-colors"
+              >
+                {meeting.title}
+              </button>
               <div className="mt-1 flex items-center gap-3 text-xs text-muted">
                 <span>{formatDate(meeting.recorded_at)}</span>
                 <span>{formatTime(meeting.recorded_at)}</span>
