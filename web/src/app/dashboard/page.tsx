@@ -7,6 +7,7 @@ import MobileHeader from '@/components/layout/MobileHeader';
 import CreateWorkspaceModal from '@/components/workspace/CreateWorkspaceModal';
 import RecordingScreen from '@/components/recording/RecordingScreen';
 import MeetingCard from '@/components/meeting/MeetingCard';
+import MeetingDetail from '@/components/meeting/MeetingDetail';
 import PendingRecordingsBanner from '@/components/recording/PendingRecordingsBanner';
 import ImportRecordingModal from '@/components/recording/ImportRecordingModal';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
@@ -47,6 +48,9 @@ export default function DashboardPage() {
   const [meetings, setMeetings] = useState<MeetingWithParts[]>([]);
   const [meetingsLoading, setMeetingsLoading] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Meeting detail view
+  const [selectedMeeting, setSelectedMeeting] = useState<MeetingWithParts | null>(null);
 
   const fetchMeetings = useCallback(async (wsId: string) => {
     setMeetingsLoading(true);
@@ -92,6 +96,7 @@ export default function DashboardPage() {
 
   // Fetch meetings when workspace changes or after recording completes
   useEffect(() => {
+    setSelectedMeeting(null);
     if (selectedWorkspace) {
       fetchMeetings(selectedWorkspace.id);
     } else {
@@ -235,6 +240,7 @@ export default function DashboardPage() {
               pendingSegmentCount={pendingSegmentCount}
               isRetrying={isRetrying}
               uploadProgress={uploadProgress}
+              selectedMeeting={selectedMeeting}
               onRetryAll={retryAll}
               onRetryOne={retryOne}
               onDiscardOne={discardOne}
@@ -245,6 +251,8 @@ export default function DashboardPage() {
               onRefreshMeetings={handleRefreshMeetings}
               onDeleteMeeting={handleDeleteMeeting}
               onArchiveMeeting={handleArchiveMeeting}
+              onViewDetail={setSelectedMeeting}
+              onBackToList={() => setSelectedMeeting(null)}
               onOpenImport={() => setShowImportModal(true)}
             />
           )}
@@ -322,6 +330,7 @@ function WorkspaceView({
   pendingSegmentCount,
   isRetrying,
   uploadProgress,
+  selectedMeeting,
   onRetryAll,
   onRetryOne,
   onDiscardOne,
@@ -332,6 +341,8 @@ function WorkspaceView({
   onRefreshMeetings,
   onDeleteMeeting,
   onArchiveMeeting,
+  onViewDetail,
+  onBackToList,
   onOpenImport,
 }: {
   workspace: Workspace;
@@ -341,6 +352,7 @@ function WorkspaceView({
   pendingSegmentCount: number;
   isRetrying: boolean;
   uploadProgress: UploadProgressMap;
+  selectedMeeting: MeetingWithParts | null;
   onRetryAll: () => Promise<void>;
   onRetryOne: (id: string) => Promise<boolean>;
   onDiscardOne: (id: string) => Promise<void>;
@@ -351,8 +363,23 @@ function WorkspaceView({
   onRefreshMeetings: () => void;
   onDeleteMeeting: (meetingId: string) => Promise<void>;
   onArchiveMeeting: (meetingId: string) => Promise<void>;
+  onViewDetail: (meeting: MeetingWithParts) => void;
+  onBackToList: () => void;
   onOpenImport: () => void;
 }) {
+  // If a meeting is selected, show the detail view
+  if (selectedMeeting) {
+    // Keep the meeting data fresh from the meetings list
+    const freshMeeting = meetings.find((m) => m.id === selectedMeeting.id) || selectedMeeting;
+    return (
+      <MeetingDetail
+        meeting={freshMeeting}
+        onBack={onBackToList}
+        onRefresh={onRefreshMeetings}
+      />
+    );
+  }
+
   return (
     <div>
       {/* Workspace header */}
@@ -424,6 +451,7 @@ function WorkspaceView({
               onRefresh={onRefreshMeetings}
               onDelete={onDeleteMeeting}
               onArchive={onArchiveMeeting}
+              onViewDetail={onViewDetail}
             />
           ))}
         </div>
