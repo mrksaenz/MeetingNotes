@@ -126,6 +126,25 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - **Migration reminder:** `002_add_is_archived.sql` must be run manually in Supabase SQL Editor
 - **Next Steps:** Mark testing for the rest of the week, then continue with mobile UX polish
 
+### Session 4 - February 17, 2026
+- **Status:** Added export to PDF/DOCX and speaker rename features
+- **Features built:**
+  - **Speaker Rename Workflow:**
+    - Added `speaker_labels` JSONB column to `meetings` table (migration 004)
+    - Speaker labels panel appears above transcription parts when multiple speakers are detected
+    - Click any speaker chip to inline-edit the name (e.g., "Speaker A" → "Mark Saenz")
+    - Changes save to database immediately and update all occurrences in the transcription view
+    - Speaker names carry through to PDF/DOCX exports
+  - **Export to PDF/DOCX:**
+    - Export dropdown button appears in meeting detail header when transcriptions exist
+    - PDF export via `jsPDF` — clean A4 layout with title, date, summary sections, bullet lists, and speaker-colored transcription
+    - DOCX export via `docx` package — fully editable Word document with headings, bullet lists, bold speaker names, and proper formatting
+    - Both formats include: executive summary, key points, decisions, action items, and full speaker-labeled transcription
+    - Filenames auto-generated from meeting title (sanitized)
+- **New dependencies:** `docx`, `jspdf`, `file-saver`, `@types/file-saver`
+- **Migration reminder:** `004_add_speaker_labels.sql` must be run manually in Supabase SQL Editor
+- **Next Steps:** Test with real meeting data, mobile UX polish
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)
@@ -146,7 +165,8 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - `recordingStore.ts` — IndexedDB wrapper: `saveRecordingLocally()`, `getPendingRecordings()`, `updateRecordingStatus()`, `deleteLocalRecording()`
 - `ToastContext` + `Toast.tsx` — Toast notification system, accessible via `useToast()` hook
 - `Providers.tsx` — Client component wrapper keeping layout.tsx as server component
-- `MeetingDetail` — Full meeting view with transcription/summary display, process button, auto-poll
+- `MeetingDetail` — Full meeting view with transcription/summary display, process button, auto-poll, speaker rename panel, export dropdown
+- `exportMeeting.ts` — Client-side export utilities: `exportToPdf()` (jsPDF) and `exportToDocx()` (docx package) with speaker label support
 - `ProcessModal` — 3-tier processing selector (transcription only / summary / full analysis)
 - `/api/process` route — Server-side: auth → signed URL → AssemblyAI → Claude Haiku → save to DB
 - `transcribeAudio()` — AssemblyAI: submit job, poll 5s intervals, return text + utterances
