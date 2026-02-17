@@ -23,6 +23,7 @@ export interface Meeting {
   is_pinned: boolean;
   is_favorite: boolean;
   is_archived: boolean;
+  speaker_labels: Record<string, string> | null;
   created_at: string;
   updated_at: string;
 }
