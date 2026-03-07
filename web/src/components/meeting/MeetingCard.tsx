@@ -134,6 +134,10 @@ export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, 
   const [processing, setProcessing] = useState(false);
   const [processingError, setProcessingError] = useState<string | null>(null);
 
+  // Inline title editing
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editTitle, setEditTitle] = useState(meeting.title);
+
   const supabase = createClient();
 
   const fetchTranscriptionForPart = useCallback(async (partId: string) => {
@@ -278,6 +282,25 @@ export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, 
     setLoadedParts(new Set());
   }
 
+  async function handleSaveTitle() {
+    const trimmed = editTitle.trim();
+    if (!trimmed || trimmed === meeting.title) {
+      setIsEditingTitle(false);
+      setEditTitle(meeting.title);
+      return;
+    }
+    const { error } = await supabase
+      .from('meetings')
+      .update({ title: trimmed })
+      .eq('id', meeting.id);
+    if (!error) {
+      onRefresh();
+    } else {
+      setEditTitle(meeting.title);
+    }
+    setIsEditingTitle(false);
+  }
+
   const hasUnprocessed = parts.some(
     (p) => p.processing_status === 'unprocessed' || p.processing_status === 'failed'
   );
@@ -290,7 +313,38 @@ export default function MeetingCard({ meeting, onContinue, onRefresh, onDelete, 
         <div className="p-4">
           <div className="flex items-start justify-between">
             <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-foreground truncate">{meeting.title}</h3>
+              {isEditingTitle ? (
+                <input
+                  type="text"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  onBlur={handleSaveTitle}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveTitle();
+                    } else if (e.key === 'Escape') {
+                      setEditTitle(meeting.title);
+                      setIsEditingTitle(false);
+                    }
+                  }}
+                  autoFocus
+                  className="w-full rounded-md border border-primary-300 bg-background px-2 py-0.5 font-medium text-foreground outline-none focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
+                />
+              ) : (
+                <button
+                  onClick={() => {
+                    setEditTitle(meeting.title);
+                    setIsEditingTitle(true);
+                  }}
+                  className="group flex items-center gap-1.5 text-left"
+                >
+                  <h3 className="font-medium text-foreground truncate">{meeting.title}</h3>
+                  <svg className="h-3.5 w-3.5 shrink-0 text-muted opacity-0 group-hover:opacity-100 transition-opacity" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
+                  </svg>
+                </button>
+              )}
               <div className="mt-1 flex items-center gap-3 text-xs text-muted">
                 <span>{formatDate(meeting.recorded_at)}</span>
                 <span>{formatTime(meeting.recorded_at)}</span>

@@ -223,9 +223,65 @@ export function usePendingUploads(): UsePendingUploadsReturn {
 
     let anySucceeded = false;
 
-    // Retry legacy full-recording uploads
-    const pending = await getPendingRecordings();
-    for (const recording of pending) {
+    // Auto-cleanup: remove recordings that were already uploaded elsewhere (e.g. desktop import)
+    const allPending = await getPendingRecordings();
+    let anyCleanedUp = false;
+    const stillPending: typeof allPending = [];
+
+    for (const recording of allPending) {
+      if (recording.meetingId) {
+        try {
+          const supabase = createClient();
+          const { data } = await supabase
+            .from('recording_parts')
+            .select('id')
+            .eq('meeting_id', recording.meetingId)
+            .eq('part_number', recording.partNumber)
+            .limit(1);
+
+          if (data && data.length > 0) {
+            await deleteLocalRecording(recording.id);
+            anyCleanedUp = true;
+            continue;
+          }
+        } catch {
+          // Non-critical — proceed to retry
+        }
+      }
+      stillPending.push(recording);
+    }
+
+    // Auto-cleanup segments already uploaded elsewhere
+    const allPendingSegs = await getPendingSegments();
+    const stillPendingSegs: typeof allPendingSegs = [];
+
+    for (const segment of allPendingSegs) {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase
+          .from('recording_segments')
+          .select('id')
+          .eq('recording_part_id', segment.recordingPartId)
+          .eq('segment_number', segment.segmentNumber)
+          .limit(1);
+
+        if (data && data.length > 0) {
+          await deleteSegmentLocally(segment.id);
+          anyCleanedUp = true;
+          continue;
+        }
+      } catch {
+        // Non-critical — proceed to retry
+      }
+      stillPendingSegs.push(segment);
+    }
+
+    if (anyCleanedUp) {
+      await refreshPending();
+    }
+
+    // Retry legacy full-recording uploads (only those not auto-cleaned)
+    for (const recording of stillPending) {
       if (recording.status !== 'pending') continue;
 
       const backoffMs = Math.min(
@@ -241,9 +297,8 @@ export function usePendingUploads(): UsePendingUploadsReturn {
       if (success) anySucceeded = true;
     }
 
-    // Retry pending segments
-    const pendingSegs = await getPendingSegments();
-    for (const segment of pendingSegs) {
+    // Retry pending segments (only those not auto-cleaned)
+    for (const segment of stillPendingSegs) {
       if (segment.status !== 'pending') continue;
 
       const backoffMs = Math.min(
