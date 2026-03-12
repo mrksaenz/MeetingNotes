@@ -141,8 +141,17 @@ export default function Sidebar({
         </nav>
       </div>
 
-      {/* Sign out */}
-      <div className="border-t border-border p-3">
+      {/* Footer links */}
+      <div className="border-t border-border p-3 space-y-1">
+        <button
+          onClick={() => router.push('/support')}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface hover:text-foreground transition-colors"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z" />
+          </svg>
+          Support
+        </button>
         <button
           onClick={handleSignOut}
           className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface hover:text-foreground transition-colors"
