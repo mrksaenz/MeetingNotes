@@ -68,6 +68,20 @@ export async function exportToDocx({ meeting, transcriptions, speakerLabels }: E
     })
   );
 
+  // Agenda
+  if (meeting.agenda_text && meeting.agenda_text.trim()) {
+    children.push(
+      new Paragraph({
+        text: 'Agenda',
+        heading: HeadingLevel.HEADING_3,
+        spacing: { before: 100, after: 100 },
+      })
+    );
+    for (const line of meeting.agenda_text.trim().split(/\r?\n/)) {
+      children.push(new Paragraph({ text: line, spacing: { after: 40 } }));
+    }
+  }
+
   // Process each part
   for (const part of meeting.recording_parts) {
     const transcription = transcriptions.get(part.id);
@@ -273,6 +287,13 @@ export function exportToPdf({ meeting, transcriptions, speakerLabels }: ExportDa
   doc.setDrawColor(200, 200, 200);
   doc.line(margin, y, pageWidth - margin, y);
   y += 6;
+
+  // Agenda
+  if (meeting.agenda_text && meeting.agenda_text.trim()) {
+    addText('AGENDA', 9, { bold: true, color: [100, 100, 100] });
+    addText(meeting.agenda_text.trim(), 10);
+    y += 3;
+  }
 
   // Process each part
   for (const part of meeting.recording_parts) {

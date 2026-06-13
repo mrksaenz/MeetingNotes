@@ -317,6 +317,16 @@ export default function MeetingDetail({ meeting, onBack, onRefresh }: MeetingDet
         </div>
       )}
 
+      {/* Agenda / reference */}
+      {meeting.agenda_text && meeting.agenda_text.trim() && (
+        <div className="mb-6 rounded-xl border border-border bg-background px-4 py-3">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-muted mb-2">Agenda</h4>
+          <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
+            {meeting.agenda_text}
+          </p>
+        </div>
+      )}
+
       {/* Speaker Labels Panel */}
       {allSpeakers.length > 1 && (
         <div className="mb-6 rounded-xl border border-border bg-background px-4 py-3">
