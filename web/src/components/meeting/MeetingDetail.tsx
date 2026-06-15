@@ -129,14 +129,24 @@ export default function MeetingDetail({ meeting, onBack, onRefresh }: MeetingDet
     fetchTranscriptions();
   }, [fetchTranscriptions]);
 
-  // Poll for updates while any part is processing
+  // Poll while any part is processing. For async (single-file) jobs this also
+  // pings /api/process/status to advance the AssemblyAI job and finalize it.
   useEffect(() => {
-    const hasProcessing = meeting.recording_parts.some(
+    const processingParts = meeting.recording_parts.filter(
       (p) => p.processing_status === 'processing'
     );
-    if (!hasProcessing) return;
+    if (processingParts.length === 0) return;
 
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
+      await Promise.all(
+        processingParts.map((p) =>
+          fetch('/api/process/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ recordingPartId: p.id }),
+          }).catch(() => {})
+        )
+      );
       onRefresh();
       fetchTranscriptions();
     }, 5000);

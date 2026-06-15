@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { createServiceClient } from '@/lib/supabase/service';
-import { transcribeAudio, transcribeSegments } from '@/lib/assemblyai';
-import { summarizeTranscription } from '@/lib/anthropic';
+import { transcribeSegments, submitTranscription } from '@/lib/assemblyai';
+import { saveSummary, logUsageAndComplete } from '@/lib/processingShared';
 import type { ProcessingLevel } from '@/types/database';
 import { cookies } from 'next/headers';
 
-// Allow up to 5 minutes for long transcriptions
+// Submitting a job returns quickly; long transcriptions complete via
+// /api/process/status polling, so this route no longer needs a long timeout.
 export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
@@ -50,11 +51,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use service client for server-side operations (bypasses RLS)
-    const serviceClient = createServiceClient();
+    const service = createServiceClient();
 
     // Fetch recording part
-    const { data: part, error: partError } = await serviceClient
+    const { data: part, error: partError } = await service
       .from('recording_parts')
       .select('*')
       .eq('id', recordingPartId)
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Verify ownership via meeting (and load the agenda for AI context)
-    const { data: meetingData, error: meetingError } = await serviceClient
+    const { data: meetingData, error: meetingError } = await service
       .from('meetings')
       .select('user_id, agenda_text')
       .eq('id', part.meeting_id)
@@ -81,16 +81,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
-    // Mark as processing
-    await serviceClient
+    await service
       .from('recording_parts')
       .update({ processing_status: 'processing' })
       .eq('id', recordingPartId);
 
-    // Reuse an existing transcription if one is already present — e.g. a
-    // manually uploaded transcript, or re-running summarization on audio that
-    // was already transcribed. This skips AssemblyAI entirely (no credits/tokens).
-    const { data: existingTranscription } = await serviceClient
+    // ── Case 1: a transcript already exists (manual upload, or re-summarize) ──
+    const { data: existing } = await service
       .from('transcriptions')
       .select('*')
       .eq('recording_part_id', recordingPartId)
@@ -98,174 +95,117 @@ export async function POST(request: NextRequest) {
       .limit(1)
       .maybeSingle();
 
-    let transcription = existingTranscription;
-    let transcriptionText = existingTranscription?.full_text ?? '';
-
-    if (existingTranscription) {
-      // Keep the recorded processing level in sync with this run.
-      await serviceClient
+    if (existing) {
+      await service
         .from('transcriptions')
         .update({ processing_level: processingLevel })
-        .eq('id', existingTranscription.id);
-    } else {
-      // No transcript yet — transcribe the audio with AssemblyAI.
-      // Check for segments (new segmented recording) vs legacy single-file.
-      const { data: segments } = await serviceClient
-        .from('recording_segments')
-        .select('*')
-        .eq('recording_part_id', recordingPartId)
-        .eq('upload_status', 'uploaded')
-        .order('segment_number', { ascending: true });
+        .eq('id', existing.id);
+      try {
+        await saveSummary(service, existing, processingLevel, meetingData.agenda_text);
+      } catch (err) {
+        console.error('Summarization failed:', err);
+      }
+      await logUsageAndComplete(service, part, user.id, processingLevel);
+      return NextResponse.json({ status: 'completed' });
+    }
 
-      const isSegmented = segments && segments.length > 0;
+    // ── Case 2: segmented recording (in-app recorder) — kept synchronous ──
+    const { data: segments } = await service
+      .from('recording_segments')
+      .select('*')
+      .eq('recording_part_id', recordingPartId)
+      .eq('upload_status', 'uploaded')
+      .order('segment_number', { ascending: true });
 
-      let transcriptionResult;
-
-      if (isSegmented) {
-      // Segmented recording: download each segment and transcribe individually, then merge
+    if (segments && segments.length > 0) {
       try {
         const segmentData: Array<{ audioData: Blob; durationSeconds: number }> = [];
-
         for (const seg of segments) {
-          const { data: fileData, error: downloadError } = await serviceClient.storage
+          const { data: fileData, error: downloadError } = await service.storage
             .from('recordings')
             .download(seg.audio_file_path);
-
           if (downloadError || !fileData) {
             throw new Error(`Failed to download segment ${seg.segment_number}: ${downloadError?.message}`);
           }
-
-          segmentData.push({
-            audioData: fileData,
-            durationSeconds: seg.duration_seconds,
-          });
+          segmentData.push({ audioData: fileData, durationSeconds: seg.duration_seconds });
         }
 
-        transcriptionResult = await transcribeSegments(segmentData);
+        const result = await transcribeSegments(segmentData);
+        const { data: inserted, error: insertErr } = await service
+          .from('transcriptions')
+          .insert({
+            recording_part_id: recordingPartId,
+            full_text: result.text,
+            speakers: result.utterances,
+            confidence_score: result.confidence,
+            provider: 'assemblyai',
+            processing_level: processingLevel,
+          })
+          .select()
+          .single();
+        if (insertErr || !inserted) {
+          throw new Error(insertErr?.message || 'Failed to save transcription');
+        }
+
+        try {
+          await saveSummary(service, inserted, processingLevel, meetingData.agenda_text);
+        } catch (err) {
+          console.error('Summarization failed:', err);
+        }
+        await logUsageAndComplete(service, part, user.id, processingLevel);
+        return NextResponse.json({ status: 'completed' });
       } catch (err) {
         console.error('Segmented transcription failed:', err);
-        await serviceClient
+        await service
           .from('recording_parts')
           .update({ processing_status: 'failed' })
           .eq('id', recordingPartId);
         const message = err instanceof Error ? err.message : 'Segmented transcription failed';
         return NextResponse.json({ error: message }, { status: 500 });
       }
-    } else {
-      // Legacy single-file recording: use signed URL approach
-      const { data: signedUrl, error: signedUrlError } = await serviceClient.storage
-        .from('recordings')
-        .createSignedUrl(part.audio_file_path, 3600); // 1 hour expiry
-
-      if (!signedUrl?.signedUrl) {
-        console.error('Signed URL error:', signedUrlError);
-        await serviceClient
-          .from('recording_parts')
-          .update({ processing_status: 'failed' })
-          .eq('id', recordingPartId);
-        return NextResponse.json({ error: 'Failed to get audio URL' }, { status: 500 });
-      }
-
-      try {
-        transcriptionResult = await transcribeAudio(signedUrl.signedUrl);
-      } catch (err) {
-        console.error('Transcription failed:', err);
-        await serviceClient
-          .from('recording_parts')
-          .update({ processing_status: 'failed' })
-          .eq('id', recordingPartId);
-        const message = err instanceof Error ? err.message : 'Transcription failed';
-        return NextResponse.json({ error: message }, { status: 500 });
-      }
     }
 
-      // Save the new transcription.
-      const { data: inserted, error: transcriptionError } = await serviceClient
-        .from('transcriptions')
-        .insert({
-          recording_part_id: recordingPartId,
-          full_text: transcriptionResult.text,
-          speakers: transcriptionResult.utterances,
-          confidence_score: transcriptionResult.confidence,
-          provider: 'assemblyai',
-          processing_level: processingLevel,
-        })
-        .select()
-        .single();
-
-      if (transcriptionError || !inserted) {
-        console.error('Failed to save transcription:', transcriptionError);
-        await serviceClient
-          .from('recording_parts')
-          .update({ processing_status: 'failed' })
-          .eq('id', recordingPartId);
-        return NextResponse.json({ error: 'Failed to save transcription' }, { status: 500 });
-      }
-
-      transcription = inserted;
-      transcriptionText = transcriptionResult.text;
-    }
-
-    if (!transcription) {
-      await serviceClient
+    // ── Case 3: single uploaded file — submit ASYNC and poll via /status ──
+    if (!part.audio_file_path) {
+      await service
         .from('recording_parts')
         .update({ processing_status: 'failed' })
         .eq('id', recordingPartId);
-      return NextResponse.json({ error: 'No transcription available' }, { status: 500 });
+      return NextResponse.json({ error: 'No audio to transcribe' }, { status: 400 });
     }
 
-    // Step 2: Summarize with Claude (if requested), using the agenda as context.
-    if (processingLevel === 'summary' || processingLevel === 'full_analysis') {
-      try {
-        const summaryResult = await summarizeTranscription(
-          transcriptionText,
-          processingLevel,
-          meetingData.agenda_text
-        );
+    const { data: signedUrl, error: signedUrlError } = await service.storage
+      .from('recordings')
+      .createSignedUrl(part.audio_file_path, 86400); // 24h — plenty for AssemblyAI to fetch
 
-        // Replace any prior summary so re-processing doesn't stack duplicates.
-        await serviceClient
-          .from('summaries')
-          .delete()
-          .eq('transcription_id', transcription.id);
-
-        await serviceClient
-          .from('summaries')
-          .insert({
-            transcription_id: transcription.id,
-            executive_summary: summaryResult.executiveSummary,
-            key_points: summaryResult.keyPoints,
-            decisions: processingLevel === 'full_analysis' ? summaryResult.decisions : null,
-            action_items: processingLevel === 'full_analysis' ? summaryResult.actionItems : null,
-          });
-      } catch (err) {
-        console.error('Summarization failed:', err);
-        // Don't fail the whole process — transcription is still saved
-      }
+    if (!signedUrl?.signedUrl) {
+      console.error('Signed URL error:', signedUrlError);
+      await service
+        .from('recording_parts')
+        .update({ processing_status: 'failed' })
+        .eq('id', recordingPartId);
+      return NextResponse.json({ error: 'Failed to get audio URL' }, { status: 500 });
     }
 
-    // Log usage
-    const durationMinutes = part.duration_seconds / 60;
-    const transcriptionCost = durationMinutes * (0.15 / 60); // $0.15/hour
-    const summaryCost = processingLevel !== 'transcription_only' ? 0.02 : 0;
+    let jobId: string;
+    try {
+      jobId = await submitTranscription(signedUrl.signedUrl);
+    } catch (err) {
+      console.error('Transcription submit failed:', err);
+      await service
+        .from('recording_parts')
+        .update({ processing_status: 'failed' })
+        .eq('id', recordingPartId);
+      const message = err instanceof Error ? err.message : 'Failed to submit transcription';
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
 
-    await serviceClient
-      .from('usage_logs')
-      .insert({
-        user_id: user.id,
-        recording_part_id: recordingPartId,
-        action_type: processingLevel,
-        duration_minutes: durationMinutes,
-        cost_usd: transcriptionCost + summaryCost,
-      });
-
-    // Mark as completed
-    await serviceClient
+    await service
       .from('recording_parts')
-      .update({ processing_status: 'completed' })
+      .update({ transcript_job_id: jobId, requested_level: processingLevel, finalizing_at: null })
       .eq('id', recordingPartId);
 
-    return NextResponse.json({ success: true, transcriptionId: transcription.id });
+    return NextResponse.json({ status: 'submitted', jobId });
   } catch (err) {
     console.error('Processing error:', err);
     const message = err instanceof Error ? err.message : 'Internal server error';

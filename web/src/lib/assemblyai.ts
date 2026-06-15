@@ -14,13 +14,40 @@ interface Utterance {
 
 const ASSEMBLYAI_BASE_URL = 'https://api.assemblyai.com/v2';
 
-export async function transcribeAudio(audioUrl: string): Promise<TranscriptionResult> {
+/** Map a completed AssemblyAI transcript payload into our schema. */
+function mapResult(result: {
+  text?: string;
+  confidence?: number;
+  utterances?: Array<{ speaker: string; text: string; start: number; end: number; confidence: number }>;
+}): TranscriptionResult {
+  const utterances: Utterance[] | null = result.utterances
+    ? result.utterances.map((u) => ({
+        speaker: u.speaker,
+        text: u.text,
+        start: u.start,
+        end: u.end,
+        confidence: u.confidence,
+      }))
+    : null;
+
+  return {
+    text: result.text || '',
+    utterances,
+    confidence: result.confidence || 0,
+  };
+}
+
+/**
+ * Submit a transcription job and return immediately with its id (no polling).
+ * AssemblyAI fetches the audio from `audioUrl` itself, so this returns in
+ * seconds even for multi-hour recordings — the caller polls for completion.
+ */
+export async function submitTranscription(audioUrl: string): Promise<string> {
   const apiKey = process.env.ASSEMBLYAI_API_KEY;
   if (!apiKey) {
     throw new Error('ASSEMBLYAI_API_KEY is not set');
   }
 
-  // Submit transcription job
   const submitResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/transcript`, {
     method: 'POST',
     headers: {
@@ -40,53 +67,61 @@ export async function transcribeAudio(audioUrl: string): Promise<TranscriptionRe
     throw new Error(`AssemblyAI submit failed: ${error}`);
   }
 
-  const { id: transcriptId } = await submitResponse.json();
+  const { id } = await submitResponse.json();
+  return id;
+}
 
-  // Poll for completion
-  let result;
+export interface TranscriptionStatus {
+  status: 'queued' | 'processing' | 'completed' | 'error';
+  result?: TranscriptionResult;
+  error?: string;
+}
+
+/** Check the status of a previously-submitted transcription job. */
+export async function getTranscriptionStatus(transcriptId: string): Promise<TranscriptionStatus> {
+  const apiKey = process.env.ASSEMBLYAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('ASSEMBLYAI_API_KEY is not set');
+  }
+
+  const pollResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/transcript/${transcriptId}`, {
+    headers: { 'Authorization': apiKey },
+  });
+
+  if (!pollResponse.ok) {
+    throw new Error('AssemblyAI poll failed');
+  }
+
+  const result = await pollResponse.json();
+
+  if (result.status === 'completed') {
+    return { status: 'completed', result: mapResult(result) };
+  }
+  if (result.status === 'error') {
+    return { status: 'error', error: result.error || 'Transcription error' };
+  }
+  return { status: result.status === 'queued' ? 'queued' : 'processing' };
+}
+
+export async function transcribeAudio(audioUrl: string): Promise<TranscriptionResult> {
+  const transcriptId = await submitTranscription(audioUrl);
+
+  // Poll for completion (used by the synchronous segmented path)
   const maxAttempts = 120; // 10 minutes max (5s intervals)
 
   for (let i = 0; i < maxAttempts; i++) {
     await new Promise((resolve) => setTimeout(resolve, 5000));
 
-    const pollResponse = await fetch(`${ASSEMBLYAI_BASE_URL}/transcript/${transcriptId}`, {
-      headers: { 'Authorization': apiKey },
-    });
-
-    if (!pollResponse.ok) {
-      throw new Error('AssemblyAI poll failed');
+    const status = await getTranscriptionStatus(transcriptId);
+    if (status.status === 'completed' && status.result) {
+      return status.result;
     }
-
-    result = await pollResponse.json();
-
-    if (result.status === 'completed') {
-      break;
-    }
-    if (result.status === 'error') {
-      throw new Error(`AssemblyAI error: ${result.error}`);
+    if (status.status === 'error') {
+      throw new Error(`AssemblyAI error: ${status.error}`);
     }
   }
 
-  if (!result || result.status !== 'completed') {
-    throw new Error('Transcription timed out');
-  }
-
-  // Format utterances for our schema
-  const utterances: Utterance[] | null = result.utterances
-    ? result.utterances.map((u: { speaker: string; text: string; start: number; end: number; confidence: number }) => ({
-        speaker: u.speaker,
-        text: u.text,
-        start: u.start,
-        end: u.end,
-        confidence: u.confidence,
-      }))
-    : null;
-
-  return {
-    text: result.text || '',
-    utterances,
-    confidence: result.confidence || 0,
-  };
+  throw new Error('Transcription timed out');
 }
 
 /**

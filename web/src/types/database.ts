@@ -38,6 +38,9 @@ export interface RecordingPart {
   recorded_at: string;
   processing_status: ProcessingStatus;
   segment_count: number | null;
+  transcript_job_id: string | null;
+  requested_level: ProcessingLevel | null;
+  finalizing_at: string | null;
   created_at: string;
 }
 
