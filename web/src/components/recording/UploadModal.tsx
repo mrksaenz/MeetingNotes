@@ -4,6 +4,7 @@ import { useState, useRef, useCallback } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { uploadAudio } from '@/lib/uploadAudio';
 import { parseTranscript } from '@/lib/parseTranscript';
+import { extractPdfText } from '@/lib/extractPdfText';
 import { useToast } from '@/contexts/ToastContext';
 import UploadProgressBar from '@/components/ui/UploadProgressBar';
 import type { Workspace } from '@/types/database';
@@ -20,7 +21,17 @@ interface UploadModalProps {
 }
 
 const AUDIO_EXT = ['.m4a', '.mp3', '.wav', '.aac', '.webm', '.mp4', '.ogg', '.flac'];
-const TRANSCRIPT_EXT = ['.txt', '.vtt', '.srt', '.md'];
+const TRANSCRIPT_EXT = ['.txt', '.vtt', '.srt', '.md', '.pdf'];
+
+function isPdf(file: File): boolean {
+  return file.name.toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+}
+
+/** Read a text/PDF file's contents as plain text. */
+async function readFileText(file: File): Promise<string> {
+  if (isPdf(file)) return extractPdfText(file);
+  return file.text();
+}
 
 /** Read an audio file's duration (seconds) via a temporary <audio> element. */
 function readAudioDuration(file: File): Promise<number> {
@@ -67,6 +78,7 @@ export default function UploadModal({
 
   const [status, setStatus] = useState('');
   const [progress, setProgress] = useState({ bytesUploaded: 0, bytesTotal: 0 });
+  const [fileLoading, setFileLoading] = useState<null | 'transcript' | 'agenda'>(null);
 
   function reset() {
     setTab('audio');
@@ -104,20 +116,43 @@ export default function UploadModal({
 
   async function loadTranscriptFile(file: File) {
     const ok = TRANSCRIPT_EXT.some((ext) => file.name.toLowerCase().endsWith(ext)) ||
-      file.type.startsWith('text/');
+      file.type.startsWith('text/') || isPdf(file);
     if (!ok) {
-      setError('Please choose a .txt, .vtt, or .srt transcript file');
+      setError('Please choose a .txt, .vtt, .srt, or .pdf transcript file');
       return;
     }
     setError(null);
-    const text = await file.text();
-    setTranscriptText(text);
-    if (!title) setTitle(file.name.replace(/\.[^.]+$/, ''));
+    setFileLoading('transcript');
+    try {
+      const text = await readFileText(file);
+      if (!text.trim()) {
+        setError('Could not read any text from that file (a scanned PDF has no text layer).');
+        return;
+      }
+      setTranscriptText(text);
+      if (!title) setTitle(file.name.replace(/\.[^.]+$/, ''));
+    } catch (err) {
+      setError(err instanceof Error ? `Could not read file: ${err.message}` : 'Could not read file');
+    } finally {
+      setFileLoading(null);
+    }
   }
 
   async function loadAgendaFile(file: File) {
-    const text = await file.text();
-    setAgenda((prev) => (prev ? prev + '\n' + text : text));
+    setError(null);
+    setFileLoading('agenda');
+    try {
+      const text = await readFileText(file);
+      if (!text.trim()) {
+        setError('Could not read any text from that agenda file (a scanned PDF has no text layer).');
+        return;
+      }
+      setAgenda((prev) => (prev ? prev + '\n' + text : text));
+    } catch (err) {
+      setError(err instanceof Error ? `Could not read file: ${err.message}` : 'Could not read file');
+    } finally {
+      setFileLoading(null);
+    }
   }
 
   const handleSubmit = useCallback(async () => {
@@ -362,15 +397,16 @@ export default function UploadModal({
                   <label className="block text-xs font-medium text-muted">Transcript</label>
                   <button
                     onClick={() => transcriptInputRef.current?.click()}
-                    className="text-xs text-primary-600 hover:text-primary-700"
+                    disabled={fileLoading !== null}
+                    className="text-xs text-primary-600 hover:text-primary-700 disabled:opacity-50"
                   >
-                    Load from file
+                    {fileLoading === 'transcript' ? 'Reading…' : 'Load from file (.txt, .pdf, …)'}
                   </button>
                   <input
                     ref={transcriptInputRef}
                     type="file"
-                    accept=".txt,.vtt,.srt,.md,text/*"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) loadTranscriptFile(f); }}
+                    accept=".txt,.vtt,.srt,.md,.pdf,application/pdf,text/*"
+                    onChange={(e) => { const f = e.target.files?.[0]; if (f) loadTranscriptFile(f); e.target.value = ''; }}
                     className="hidden"
                   />
                 </div>
@@ -391,15 +427,16 @@ export default function UploadModal({
                 <label className="block text-xs font-medium text-muted">Agenda / reference <span className="font-normal">(optional)</span></label>
                 <button
                   onClick={() => { const el = document.getElementById('agenda-file') as HTMLInputElement; el?.click(); }}
-                  className="text-xs text-primary-600 hover:text-primary-700"
+                  disabled={fileLoading !== null}
+                  className="text-xs text-primary-600 hover:text-primary-700 disabled:opacity-50"
                 >
-                  Load from file
+                  {fileLoading === 'agenda' ? 'Reading…' : 'Load from file (.txt, .pdf, …)'}
                 </button>
                 <input
                   id="agenda-file"
                   type="file"
-                  accept=".txt,.md,text/*"
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) loadAgendaFile(f); }}
+                  accept=".txt,.md,.pdf,application/pdf,text/*"
+                  onChange={(e) => { const f = e.target.files?.[0]; if (f) loadAgendaFile(f); e.target.value = ''; }}
                   className="hidden"
                 />
               </div>
