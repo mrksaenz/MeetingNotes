@@ -1,7 +1,7 @@
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
 import { jsPDF } from 'jspdf';
 import { saveAs } from 'file-saver';
-import type { Meeting, RecordingPart, Transcription, Summary, SpeakerSegment } from '@/types/database';
+import type { Meeting, RecordingPart, Transcription, Summary } from '@/types/database';
 
 interface TranscriptionWithSummary extends Transcription {
   summaries: Summary[];
@@ -35,27 +35,41 @@ function formatDate(dateStr: string): string {
   });
 }
 
+function formatPdfDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
 // ─── DOCX Export ────────────────────────────────────────────────────────────
 
 export async function exportToDocx({ meeting, transcriptions, speakerLabels }: ExportData) {
   const children: Paragraph[] = [];
 
-  // Title
+  // Title (cover)
   children.push(
     new Paragraph({
       text: meeting.title,
       heading: HeadingLevel.HEADING_1,
+      alignment: AlignmentType.CENTER,
       spacing: { after: 100 },
     })
   );
 
   // Date & metadata
+  const docTotalSeconds = meeting.recording_parts.reduce((s, p) => s + (p.duration_seconds || 0), 0);
+  const metaRuns = [
+    new TextRun({ text: formatDate(meeting.recorded_at), color: '666666', size: 20 }),
+    new TextRun({ text: `   |   ${meeting.recording_parts.length} part${meeting.recording_parts.length !== 1 ? 's' : ''}`, color: '666666', size: 20 }),
+  ];
+  if (docTotalSeconds > 0) {
+    metaRuns.push(new TextRun({ text: `   |   ${formatPdfDuration(docTotalSeconds)}`, color: '666666', size: 20 }));
+  }
   children.push(
     new Paragraph({
-      children: [
-        new TextRun({ text: formatDate(meeting.recorded_at), color: '666666', size: 20 }),
-        new TextRun({ text: `   |   ${meeting.recording_parts.length} part${meeting.recording_parts.length !== 1 ? 's' : ''}`, color: '666666', size: 20 }),
-      ],
+      children: metaRuns,
+      alignment: AlignmentType.CENTER,
       spacing: { after: 300 },
     })
   );
@@ -273,20 +287,33 @@ export function exportToPdf({ meeting, transcriptions, speakerLabels }: ExportDa
     y += 2;
   }
 
-  // Title
-  addText(meeting.title, 20, { bold: true });
-  y += 2;
+  // ── Cover header ──────────────────────────────────────────────────────
+  // Blue band across the top with the meeting title in white.
+  const bandHeight = 34;
+  doc.setFillColor(37, 99, 235); // primary blue
+  doc.rect(0, 0, pageWidth, bandHeight, 'F');
 
-  // Date
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(20);
+  const titleLines = doc.splitTextToSize(meeting.title, contentWidth);
+  let titleY = 16;
+  for (const line of titleLines.slice(0, 2)) {
+    doc.text(line, margin, titleY);
+    titleY += 8;
+  }
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(10);
   const dateStr = formatDate(meeting.recorded_at);
   const partCount = `${meeting.recording_parts.length} part${meeting.recording_parts.length !== 1 ? 's' : ''}`;
-  addText(`${dateStr}  |  ${partCount}`, 10, { color: [100, 100, 100] });
-  y += 2;
+  const totalSeconds = meeting.recording_parts.reduce((s, p) => s + (p.duration_seconds || 0), 0);
+  const meta = [dateStr, partCount, totalSeconds > 0 ? formatPdfDuration(totalSeconds) : '']
+    .filter(Boolean)
+    .join('   |   ');
+  doc.text(meta, margin, bandHeight - 6);
 
-  // Separator line
-  doc.setDrawColor(200, 200, 200);
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 6;
+  y = bandHeight + 12;
 
   // Agenda
   if (meeting.agenda_text && meeting.agenda_text.trim()) {
@@ -394,8 +421,14 @@ export function exportToPdf({ meeting, transcriptions, speakerLabels }: ExportDa
       y += 3;
     }
 
+    // Start the full transcript on a fresh page when notes preceded it, so the
+    // summary/decisions/action items read as a clean cover section.
+    const hasNotes = !!(summary?.executive_summary || summary?.key_points?.length ||
+      summary?.decisions?.length || summary?.action_items?.length);
+
     // Transcription
     if (transcription.speakers && transcription.speakers.length > 0) {
+      if (hasNotes) { doc.addPage(); y = margin; }
       checkPageBreak(10);
       addText('TRANSCRIPTION', 9, { bold: true, color: [100, 100, 100] });
       y += 2;
@@ -429,6 +462,7 @@ export function exportToPdf({ meeting, transcriptions, speakerLabels }: ExportDa
         y += 3;
       }
     } else if (transcription.full_text) {
+      if (hasNotes) { doc.addPage(); y = margin; }
       checkPageBreak(10);
       addText('TRANSCRIPTION', 9, { bold: true, color: [100, 100, 100] });
       addText(transcription.full_text, 10);
