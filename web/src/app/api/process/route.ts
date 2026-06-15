@@ -65,10 +65,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Recording part not found' }, { status: 404 });
     }
 
-    // Verify ownership via meeting
+    // Verify ownership via meeting (and load the agenda for AI context)
     const { data: meetingData, error: meetingError } = await serviceClient
       .from('meetings')
-      .select('user_id')
+      .select('user_id, agenda_text')
       .eq('id', part.meeting_id)
       .single();
 
@@ -87,19 +87,41 @@ export async function POST(request: NextRequest) {
       .update({ processing_status: 'processing' })
       .eq('id', recordingPartId);
 
-    // Check for segments (new segmented recording) vs legacy single-file
-    const { data: segments } = await serviceClient
-      .from('recording_segments')
+    // Reuse an existing transcription if one is already present — e.g. a
+    // manually uploaded transcript, or re-running summarization on audio that
+    // was already transcribed. This skips AssemblyAI entirely (no credits/tokens).
+    const { data: existingTranscription } = await serviceClient
+      .from('transcriptions')
       .select('*')
       .eq('recording_part_id', recordingPartId)
-      .eq('upload_status', 'uploaded')
-      .order('segment_number', { ascending: true });
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    const isSegmented = segments && segments.length > 0;
+    let transcription = existingTranscription;
+    let transcriptionText = existingTranscription?.full_text ?? '';
 
-    let transcriptionResult;
+    if (existingTranscription) {
+      // Keep the recorded processing level in sync with this run.
+      await serviceClient
+        .from('transcriptions')
+        .update({ processing_level: processingLevel })
+        .eq('id', existingTranscription.id);
+    } else {
+      // No transcript yet — transcribe the audio with AssemblyAI.
+      // Check for segments (new segmented recording) vs legacy single-file.
+      const { data: segments } = await serviceClient
+        .from('recording_segments')
+        .select('*')
+        .eq('recording_part_id', recordingPartId)
+        .eq('upload_status', 'uploaded')
+        .order('segment_number', { ascending: true });
 
-    if (isSegmented) {
+      const isSegmented = segments && segments.length > 0;
+
+      let transcriptionResult;
+
+      if (isSegmented) {
       // Segmented recording: download each segment and transcribe individually, then merge
       try {
         const segmentData: Array<{ audioData: Blob; durationSeconds: number }> = [];
@@ -157,36 +179,55 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Save transcription
-    const { data: transcription, error: transcriptionError } = await serviceClient
-      .from('transcriptions')
-      .insert({
-        recording_part_id: recordingPartId,
-        full_text: transcriptionResult.text,
-        speakers: transcriptionResult.utterances,
-        confidence_score: transcriptionResult.confidence,
-        provider: 'assemblyai',
-        processing_level: processingLevel,
-      })
-      .select()
-      .single();
+      // Save the new transcription.
+      const { data: inserted, error: transcriptionError } = await serviceClient
+        .from('transcriptions')
+        .insert({
+          recording_part_id: recordingPartId,
+          full_text: transcriptionResult.text,
+          speakers: transcriptionResult.utterances,
+          confidence_score: transcriptionResult.confidence,
+          provider: 'assemblyai',
+          processing_level: processingLevel,
+        })
+        .select()
+        .single();
 
-    if (transcriptionError || !transcription) {
-      console.error('Failed to save transcription:', transcriptionError);
+      if (transcriptionError || !inserted) {
+        console.error('Failed to save transcription:', transcriptionError);
+        await serviceClient
+          .from('recording_parts')
+          .update({ processing_status: 'failed' })
+          .eq('id', recordingPartId);
+        return NextResponse.json({ error: 'Failed to save transcription' }, { status: 500 });
+      }
+
+      transcription = inserted;
+      transcriptionText = transcriptionResult.text;
+    }
+
+    if (!transcription) {
       await serviceClient
         .from('recording_parts')
         .update({ processing_status: 'failed' })
         .eq('id', recordingPartId);
-      return NextResponse.json({ error: 'Failed to save transcription' }, { status: 500 });
+      return NextResponse.json({ error: 'No transcription available' }, { status: 500 });
     }
 
-    // Step 2: Summarize with Claude (if requested)
+    // Step 2: Summarize with Claude (if requested), using the agenda as context.
     if (processingLevel === 'summary' || processingLevel === 'full_analysis') {
       try {
         const summaryResult = await summarizeTranscription(
-          transcriptionResult.text,
-          processingLevel
+          transcriptionText,
+          processingLevel,
+          meetingData.agenda_text
         );
+
+        // Replace any prior summary so re-processing doesn't stack duplicates.
+        await serviceClient
+          .from('summaries')
+          .delete()
+          .eq('transcription_id', transcription.id);
 
         await serviceClient
           .from('summaries')

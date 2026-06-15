@@ -20,6 +20,7 @@ export interface Meeting {
   attendees: string[] | null;
   tags: string[] | null;
   user_notes: string | null;
+  agenda_text: string | null;
   is_pinned: boolean;
   is_favorite: boolean;
   is_archived: boolean;

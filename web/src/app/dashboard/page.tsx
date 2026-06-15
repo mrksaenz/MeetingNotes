@@ -10,6 +10,7 @@ import MeetingCard from '@/components/meeting/MeetingCard';
 import MeetingDetail from '@/components/meeting/MeetingDetail';
 import PendingRecordingsBanner from '@/components/recording/PendingRecordingsBanner';
 import ImportRecordingModal from '@/components/recording/ImportRecordingModal';
+import UploadModal from '@/components/recording/UploadModal';
 import { useWorkspaces } from '@/hooks/useWorkspaces';
 import { usePendingUploads } from '@/hooks/usePendingUploads';
 import { createClient } from '@/lib/supabase/client';
@@ -39,6 +40,7 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<'workspaces' | 'recordings' | 'settings'>('recordings');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -254,6 +256,7 @@ export default function DashboardPage() {
               onViewDetail={setSelectedMeeting}
               onBackToList={() => setSelectedMeeting(null)}
               onOpenImport={() => setShowImportModal(true)}
+              onOpenUpload={() => setShowUploadModal(true)}
             />
           )}
         </main>
@@ -275,6 +278,18 @@ export default function DashboardPage() {
         onClose={() => setShowImportModal(false)}
         onImportComplete={() => {
           setShowImportModal(false);
+          setRefreshTrigger((prev) => prev + 1);
+        }}
+        workspaces={workspaces}
+        selectedWorkspaceId={selectedWorkspace?.id}
+      />
+
+      {/* Upload modal (raw audio / transcript / agenda) */}
+      <UploadModal
+        open={showUploadModal}
+        onClose={() => setShowUploadModal(false)}
+        onUploadComplete={() => {
+          setShowUploadModal(false);
           setRefreshTrigger((prev) => prev + 1);
         }}
         workspaces={workspaces}
@@ -344,6 +359,7 @@ function WorkspaceView({
   onViewDetail,
   onBackToList,
   onOpenImport,
+  onOpenUpload,
 }: {
   workspace: Workspace;
   meetings: MeetingWithParts[];
@@ -366,6 +382,7 @@ function WorkspaceView({
   onViewDetail: (meeting: MeetingWithParts) => void;
   onBackToList: () => void;
   onOpenImport: () => void;
+  onOpenUpload: () => void;
 }) {
   // If a meeting is selected, show the detail view
   if (selectedMeeting) {
@@ -394,6 +411,15 @@ function WorkspaceView({
 
         {/* Desktop action buttons */}
         <div className="hidden md:flex items-center gap-2">
+          <button
+            onClick={onOpenUpload}
+            className="flex items-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-surface transition-colors"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+            </svg>
+            Upload
+          </button>
           <button
             onClick={onOpenImport}
             className="flex items-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium text-foreground hover:bg-surface transition-colors"
@@ -472,6 +498,14 @@ function WorkspaceView({
 
       {/* Floating buttons (mobile) */}
       <div className="fixed bottom-20 right-4 md:hidden z-30 flex flex-col items-center gap-3">
+        <button
+          onClick={onOpenUpload}
+          className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md transition-all hover:shadow-lg active:scale-95"
+        >
+          <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+          </svg>
+        </button>
         <button
           onClick={onOpenImport}
           className="flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-md transition-all hover:shadow-lg active:scale-95"

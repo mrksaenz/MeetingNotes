@@ -145,6 +145,21 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - **Migration reminder:** `004_add_speaker_labels.sql` must be run manually in Supabase SQL Editor
 - **Next Steps:** Test with real meeting data, mobile UX polish
 
+### Session 5 - June 13, 2026
+- **Status:** Added file upload (audio + transcript), agenda reference, and long-meeting summarization for the 5-hour TBA Board workflow
+- **Why:** Mark records on his phone's voice memo app (better than the in-app recorder) and wants to upload those files, plus existing transcripts and the agenda, then export clean PDF/Word notes with an executive summary, decisions, and action items.
+- **Built:**
+  - **Upload modal (`UploadModal.tsx`)** — new "Upload" button (desktop header + mobile FAB). Two tabs:
+    - *Audio file:* drop raw voice-memo files (m4a/mp3/wav/…), multiple files become multi-part meetings. Reads duration client-side, uploads via existing `uploadAudio` (tus), then transcribes via AssemblyAI on Process.
+    - *Transcript:* paste or upload `.txt/.vtt/.srt`; stored directly as a `manual` transcription — **skips AssemblyAI entirely** (most token/credit-efficient path). User can still run summary/analysis.
+  - **Agenda reference** — optional agenda field on both tabs → new `meetings.agenda_text` column (migration 005). Agenda is shown in the meeting detail and included in PDF/DOCX exports.
+  - **Transcript parser (`parseTranscript.ts`)** — handles WebVTT, SRT, "Speaker: text" lines, and free-form text → utterances + full_text.
+  - **Hybrid summarization (`anthropic.ts` rewrite)** — single pass for short meetings; **map-reduce** above ~40k chars (≈5-hr meetings): extract decisions/key-points/action-items per ~30k-char chunk (3-wide concurrency), then a reduce pass merges/dedupes. Agenda + instructions sent as a **prompt-cached system block** so they aren't re-billed across chunks. `max_tokens` raised to 4096.
+  - **`/api/process` changes** — reuses an existing transcription if present (manual upload, or re-summarizing already-transcribed audio) instead of re-transcribing; passes `agenda_text` to the summarizer; deletes prior summaries before inserting to avoid duplicates on re-run.
+- **Migration reminder:** `005_add_agenda_and_manual.sql` must be run manually in Supabase SQL Editor (adds `meetings.agenda_text` + a transcriptions lookup index).
+- **Verified:** `tsc --noEmit` clean; `next build` compiles + typechecks (prerender of `/auth/login` fails only due to missing Supabase env vars in the build sandbox — pre-existing, unrelated).
+- **Next Steps:** Run migration 005, then test end-to-end with a real 5-hr recording; speaker-panel "jump to first quote" + PDF cover-page polish still pending.
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)

@@ -71,6 +71,37 @@ export default function MeetingDetail({ meeting, onBack, onRefresh }: MeetingDet
     return speakerLabels[speaker] || `Speaker ${speaker}`;
   }
 
+  // First occurrence of each speaker (for "jump to quote") + a sample quote.
+  const speakerInfo = useMemo(() => {
+    const info: Record<string, { elementId: string; quote: string }> = {};
+    for (const part of meeting.recording_parts) {
+      const t = transcriptions.get(part.id);
+      if (!t?.speakers) continue;
+      t.speakers.forEach((u, i) => {
+        if (!info[u.speaker] && u.text.trim()) {
+          info[u.speaker] = {
+            elementId: `utt-${part.id}-${i}`,
+            quote: u.text.length > 90 ? u.text.slice(0, 90).trim() + '…' : u.text,
+          };
+        }
+      });
+    }
+    return info;
+  }, [meeting.recording_parts, transcriptions]);
+
+  const [highlightedUtterance, setHighlightedUtterance] = useState<string | null>(null);
+
+  function jumpToSpeaker(speaker: string) {
+    const target = speakerInfo[speaker];
+    if (!target) return;
+    const el = document.getElementById(target.elementId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedUtterance(target.elementId);
+      window.setTimeout(() => setHighlightedUtterance(null), 1600);
+    }
+  }
+
   const fetchTranscriptions = useCallback(async () => {
     const supabase = createClient();
     const partIds = meeting.recording_parts.map((p) => p.id);
@@ -317,56 +348,78 @@ export default function MeetingDetail({ meeting, onBack, onRefresh }: MeetingDet
         </div>
       )}
 
+      {/* Agenda / reference */}
+      {meeting.agenda_text && meeting.agenda_text.trim() && (
+        <div className="mb-6 rounded-xl border border-border bg-background px-4 py-3">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-muted mb-2">Agenda</h4>
+          <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
+            {meeting.agenda_text}
+          </p>
+        </div>
+      )}
+
       {/* Speaker Labels Panel */}
       {allSpeakers.length > 1 && (
         <div className="mb-6 rounded-xl border border-border bg-background px-4 py-3">
-          <h4 className="text-xs font-medium uppercase tracking-wider text-muted mb-2">
+          <h4 className="text-xs font-medium uppercase tracking-wider text-muted mb-3">
             Speakers
-            <span className="ml-2 font-normal normal-case tracking-normal">— click to rename</span>
+            <span className="ml-2 font-normal normal-case tracking-normal">— click a name to rename, or a quote to jump to it</span>
           </h4>
-          <div className="flex flex-wrap gap-2">
-            {allSpeakers.map((speaker) => (
-              <div key={speaker}>
-                {editingSpeaker === speaker ? (
-                  <form
-                    className="flex items-center gap-1"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      saveSpeakerLabel();
-                    }}
-                  >
-                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary-100 text-xs font-medium text-primary-700">
-                      {speaker}
-                    </span>
-                    <input
-                      ref={editInputRef}
-                      type="text"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      onBlur={saveSpeakerLabel}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Escape') cancelEditingSpeaker();
+          <div className="space-y-1.5">
+            {allSpeakers.map((speaker) => {
+              const info = speakerInfo[speaker];
+              return (
+                <div key={speaker} className="flex items-center gap-2">
+                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary-100 text-xs font-medium text-primary-700">
+                    {speaker}
+                  </span>
+                  {editingSpeaker === speaker ? (
+                    <form
+                      className="flex items-center gap-1"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        saveSpeakerLabel();
                       }}
-                      placeholder={`Speaker ${speaker}`}
-                      className="w-36 rounded-md border border-primary-300 bg-background px-2 py-1 text-sm text-foreground focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
-                    />
-                  </form>
-                ) : (
-                  <button
-                    onClick={() => startEditingSpeaker(speaker)}
-                    className="flex items-center gap-1.5 rounded-full border border-border bg-surface px-3 py-1 text-sm text-foreground hover:border-primary-300 hover:bg-primary-50 transition-colors"
-                  >
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-primary-100 text-xs font-medium text-primary-700">
-                      {speaker}
-                    </span>
-                    {getSpeakerName(speaker)}
-                    <svg className="h-3 w-3 text-muted" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-            ))}
+                    >
+                      <input
+                        ref={editInputRef}
+                        type="text"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onBlur={saveSpeakerLabel}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') cancelEditingSpeaker();
+                        }}
+                        placeholder={`Speaker ${speaker}`}
+                        className="w-40 rounded-md border border-primary-300 bg-background px-2 py-1 text-sm text-foreground focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                      />
+                    </form>
+                  ) : (
+                    <button
+                      onClick={() => startEditingSpeaker(speaker)}
+                      className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-sm font-medium text-foreground hover:bg-primary-50 transition-colors"
+                    >
+                      {getSpeakerName(speaker)}
+                      <svg className="h-3 w-3 text-muted" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487z" />
+                      </svg>
+                    </button>
+                  )}
+                  {info && (
+                    <button
+                      onClick={() => jumpToSpeaker(speaker)}
+                      title="Jump to first quote"
+                      className="group flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs text-muted hover:bg-surface transition-colors"
+                    >
+                      <span className="truncate italic">&ldquo;{info.quote}&rdquo;</span>
+                      <svg className="h-3.5 w-3.5 shrink-0 text-muted group-hover:text-primary-500" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -471,7 +524,15 @@ export default function MeetingDetail({ meeting, onBack, onRefresh }: MeetingDet
                     {transcription.speakers && transcription.speakers.length > 0 ? (
                       <div className="space-y-3 max-h-96 overflow-y-auto">
                         {transcription.speakers.map((utterance, i) => (
-                          <div key={i} className="flex gap-3">
+                          <div
+                            key={i}
+                            id={`utt-${part.id}-${i}`}
+                            className={`flex gap-3 rounded-lg transition-colors duration-500 ${
+                              highlightedUtterance === `utt-${part.id}-${i}`
+                                ? 'bg-primary-50 ring-1 ring-primary-200'
+                                : ''
+                            }`}
+                          >
                             <div className="shrink-0">
                               <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-primary-100 text-xs font-medium text-primary-700">
                                 {utterance.speaker}
