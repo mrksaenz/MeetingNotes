@@ -1,0 +1,25 @@
+appId: org.texasbandmasters.meetingnotes
+productName: MeetingNotes
+directories:
+  buildResources: build
+files:
+  - out/**
+  - package.json
+mac:
+  category: public.app-category.productivity
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  # Recording uses the microphone; macOS requires a usage description or the
+  # app is killed the moment getUserMedia is called.
+  extendInfo:
+    NSMicrophoneUsageDescription: MeetingNotes uses the microphone to record meetings.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+dmg:
+  artifactName: MeetingNotes-${version}-${arch}.dmg
+npmRebuild: false
