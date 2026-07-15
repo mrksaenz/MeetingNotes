@@ -3,8 +3,8 @@ name: Build Mac App
 on:
   workflow_dispatch:
   push:
-    branches: [main]
-    paths: ['desktop/**']
+    branches: [main, 'claude/mac-app-google-drive-udabe3']
+    paths: ['desktop/**', '.github/workflows/build-mac.yml']
 
 permissions:
   contents: write
