@@ -160,6 +160,22 @@ A responsive web application for meeting notes with audio recording, AI-powered 
 - **Verified:** `tsc --noEmit` clean; `next build` compiles + typechecks (prerender of `/auth/login` fails only due to missing Supabase env vars in the build sandbox — pre-existing, unrelated).
 - **Next Steps:** Run migration 005, then test end-to-end with a real 5-hr recording; speaker-panel "jump to first quote" + PDF cover-page polish still pending.
 
+### Session 6 - July 15, 2026
+- **Status:** Built standalone Mac desktop app (`desktop/`) — no database, Google Drive as storage
+- **Why:** Mark's goal shifted: the app must be handable to future Texas Bandmasters Association secretaries with no accounts, no Supabase, no server. The Google Drive folder *is* the database.
+- **Architecture (desktop/):**
+  - Electron + electron-vite + React 19 + Tailwind v4 (same visual language as web: blue palette, minimal)
+  - **File-based storage:** each meeting is a folder (`<library>/2026-07-15 TBA Board Meeting/`) containing `meeting.json` (metadata + transcripts + summary + speaker labels), `audio/part-NN.ext`, and `exports/` with PDFs/DOCX. The library folder is chosen on first run — pointing it at a Google Drive for Desktop folder gives sync + secretary handoff for free (no Drive API, no OAuth).
+  - **API keys** (AssemblyAI + Anthropic) entered in Settings, stored via `safeStorage` (Keychain-encrypted) in userData — deliberately NOT in the synced folder
+  - **Recording:** MediaRecorder in the renderer (Mac mic), consent reminder, pause/resume, canvas waveform, 1s data chunks; blob → ArrayBuffer over IPC → written to the meeting folder
+  - **Uploads:** voice-memo files via `webUtils.getPathForFile` (main copies the file); pasted/uploaded transcripts parsed by the same `parseTranscript.ts` (skips AssemblyAI)
+  - **Processing (main process):** upload audio bytes to AssemblyAI `/v2/upload` → transcribe with `speech_models: ['universal-2']` + diarization → save after every part (crash-safe, re-runs skip transcribed parts) → meeting-level summary across all parts via the ported map-reduce `anthropic.ts` (agenda prompt-cached). Progress streamed to renderer via `webContents.send`.
+  - **Exports (main process):** jsPDF + docx ported from `exportMeeting.ts`, verified working in Node; files written to the meeting's `exports/` folder and revealed in Finder
+- **Build/distribute:** `npm run dist` → dmg via electron-builder (mic entitlement + NSMicrophoneUsageDescription configured). Unsigned for now; notarization TODO if distributed beyond TBA.
+- **Verified:** typecheck clean (node + web tsconfigs), `electron-vite build` succeeds, jsPDF/docx produce valid files in Node. NOT yet run on a real Mac (this env is Linux) — needs Mark to `npm run dev` locally.
+- **Web app (`web/`) untouched** — still deployable; desktop app is a parallel product sharing ported lib code.
+- **Next Steps:** Mark runs it on his Mac (`cd desktop && npm install && npm run dev`), test record → process → export → Drive sync end-to-end, then `npm run dist` for the dmg
+
 ## Architecture Notes
 - `web/` — Next.js app (all frontend + API routes)
 - `supabase/migrations/` — SQL migrations (run manually in Supabase SQL Editor)
